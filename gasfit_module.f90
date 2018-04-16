@@ -1,10 +1,8 @@
 MODULE GASFIT_MODULE
 
 ! General control input variables
-  CHARACTER(256) :: fitin, fitout, specin, specout, inputline, &
-       general_line, solar_line, radiance_line
-  LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
-       if_residuals
+  CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line
+  LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, if_residuals
 
 ! Parameters
 INTEGER*4, PARAMETER :: mmax = 64
@@ -12,12 +10,24 @@ INTEGER*4, PARAMETER :: maxpts = 7000
 INTEGER*4, PARAMETER :: maxpix = 2000
 REAL*8, PARAMETER ::pi = 3.14159265358979d0
 
-! Solar fitting variables
+! Solar fitting control & variables (read or derived from input control file)
+CHARACTER(256) :: solar_line
 LOGICAL :: iterate_sun, weight_sun
 LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_var_sun
-INTEGER*4 :: n_solar_pars, ll_sun, lu_sun
+INTEGER*4 :: n_solar_pars, ll_sun, lu_sun, nvar_sun, &
+     nhw1e, nshift, nsqueeze, nshape
+INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
 REAL*8 :: div_sun
-REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun
+REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun
+
+! Radiance fitting control & variables (read from input control file)
+CHARACTER(300) :: radiance_line
+LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
+LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
+INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, n_rad_pars, nvaried, &
+     nhw1erad, nshiftrad, nsqueezerad, nshaperad
+REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
+REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff
 
 CONTAINS
 SUBROUTINE GASFIT()
@@ -45,25 +55,20 @@ SUBROUTINE GASFIT()
 ! December 30, 2010
 
 IMPLICIT NONE
-LOGICAL :: iterate_rad, &
-  weight_rad, renorm, update_pars, if_varied (mmax), iprovar
-REAL*8, DIMENSION(mmax) :: initial, init_sun, var, diff
+LOGICAL :: iprovar
 REAL*8, DIMENSION(maxpts) :: pos_sun, spec_sun, sig_sun, spline_sun, &
      deriv2sun, pos, spec, sig, fit, temp, residual
 REAL*8, DIMENSION(2,maxpts) :: underspec
 REAL*8, DIMENSION(11,maxpts) :: database
 REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
 REAL*8, DIMENSION(mmax,mmax) :: correl, covar
-REAL*8 :: latmax, latmin, asum, automult, avg, chisq, &
-     davg, delchi, dgas, dhw1e, div_rad, drelavg, dshift, dshiftavg, &
-     dshiftrad, gas, hw1e, phase, provar, remult, report_mult, rms, rmsavg, &
-     shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa, &
-     szamax, szamin
+REAL*8 :: asum, automult, avg, chisq, &
+     davg, delchi, dgas, dhw1e, drelavg, dshift, dshiftavg, &
+     dshiftrad, gas, hw1e, provar, remult, rms, rmsavg, &
+     shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
 INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-     iteration, j, ll_rad, lu_rad, &
-     nfirst,nfirstfit, ngas, nhw1e, npars, npoints, nrads, nreport, &
-     nshift, nshiftrad, nvar_sun, nvaried, cldmax
-INTEGER*4, DIMENSION(mmax) :: list_sun, list_rad
+     iteration, j, nfirst,nfirstfit, ngas, npars, npoints, nrads
+INTEGER*4, DIMENSION(mmax) :: list_rad
 INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
 REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
 
@@ -165,9 +170,13 @@ read (21, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
 ! ignored and 0.001 * abs (var_sun (i)) is used instead.
 !
 read (21, '(a)') solar_line
-read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun
+read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun, &
+     nhw1e, nshift, nsqueeze, nshape
 ! Now that I know the number of solar fitting variables allocate
-ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars))
+ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars), &
+     init_sun(1:n_solar_pars), list_sun(1:n_solar_pars))
+
+! Read variables
 do i = 1, n_solar_pars
   read (21, *) var_sun (i), if_var_sun (i), diffsun (i)
 end do
@@ -189,18 +198,12 @@ do i = 1, n_solar_pars
     nvar_sun = nvar_sun + 1
     list_sun (nvar_sun) = i
   end if
-  if (i .eq. 10) nhw1e = nvar_sun
-  if (i .eq. 11) nshift = nvar_sun
 end do
 if (nvar_sun .gt. mmax) then
   write (22, *) ' maximum number of solar parameters exceeded.'
   go to 1000
 end if
 if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
-
-
-DEALLOCATE(var_sun, diffsun, if_var_sun)
-stop
 
 ! Read radiance fitting parameters:
 !
@@ -244,13 +247,22 @@ stop
 !
 read (21, '(a)') radiance_line
 read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-  div_rad, phase, nreport, report_mult
+     div_rad, phase, nreport, report_mult, n_rad_pars, nhw1erad, nshiftrad, &
+     nsqueezerad, nshaperad
 read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
-i = 1
-20 read (21, *, end = 30) var (i), if_varied (i), diff (i)
-  i = i + 1
-  go to 20
-30 npars = i - 1
+print*, iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
+     div_rad, phase, nreport, report_mult, n_rad_pars, nhw1erad, nshiftrad, &
+     nsqueezerad, nshaperad
+
+! Allocate radiance fitting parameter variables
+ALLOCATE(var(1:n_rad_pars), if_varied(1:n_rad_pars),diff(1:n_rad_pars), &
+     initial(1:n_rad_pars))
+
+! Read variables
+DO i = 1, n_rad_pars
+   read (21, *) var (i), if_varied (i), diff (i)
+END DO
+npars = n_rad_pars
 
 ! Automatic difference-taking.
 if (autodiff) then
@@ -269,23 +281,31 @@ do i = 1, npars
     list_rad (nvaried) = i
     if (i .eq. nreport) ngas = nvaried
   end if
-  if (i .eq. 11) nshiftrad = nvaried
 end do
 if (nvaried .gt. mmax) then
   write (22, *) ' maximum number of radiance parameters exceeded.'
   go to 1000
 end if
-if (wrt_scr) write (*, *) 'nvaried =', nvaried
+if (wrt_scr) write (*, *) 'nvaried  =', nvaried
 if (wrt_scr) write (*, *) 'Max. sza =', szamax
 if (wrt_scr) write (*, *) 'Min. sza =', szamin
 if (wrt_scr) write (*, *) 'Max. lat =', latmax
 if (wrt_scr) write (*, *) 'Min. lat =', latmin
 if (wrt_scr) write (*, *) 'Max. cld =', cldmax
+if (wrt_scr) write (*, *) 'nhw1e    =', nhw1erad
+if (wrt_scr) write (*, *) 'nshift   =', nshiftrad
+if (wrt_scr) write (*, *) 'nsqueeze =', nsqueezerad
+if (wrt_scr) write (*, *) 'nshape   =', nshaperad
 
 ! Open fitting output file.
 if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
 read (*, '(a)') fitout
 open (unit = 22, file = fitout, status='unknown')
+
+
+DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
+     var, if_varied, diff, initial)
+stop
 
 ! Open irradiance and radiance level 1 file.
 if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
