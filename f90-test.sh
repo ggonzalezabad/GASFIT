@@ -1,6 +1,8 @@
-gfortran -g -fbacktrace -fcheck=all -Wall -o gasbeta.x gasbeta.f90
+gfortran -g -c -fbacktrace -fcheck=all -Wall gasfit_module.f90 main.f90
+gfortran -g -fbacktrace -fcheck=all -Wall -o gasbeta.exe main.o gasfit_module.o
 
-./gasbeta.x << EOF
+
+./gasbeta.exe << EOF
 gasbeta_csic_io.inp
 test_output.txt
 ace_zn_vis_2017_01_16_gasbeta.txt
@@ -25,6 +27,7 @@ res.bro228_10cm.boas
   1.d0, f, 1.d0
 EOF
 
+rm -vf *.o *.mod gasbeta.exe
 #diff 81003031.bro.part 81003031.bro.part.sav
 #
 # irrad: shift, 1 sigma =  -5.467635E-03  4.499953E-04
