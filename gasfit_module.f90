@@ -1,5 +1,10 @@
 MODULE GASFIT_MODULE
 
+! General control input variables
+  CHARACTER(120) :: fitin, fitout, specin, specout, inputline, &
+       general_line, solar_line, radiance_line
+  LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
+       if_residuals
 
 CONTAINS
 SUBROUTINE GASFIT()
@@ -27,16 +32,12 @@ SUBROUTINE GASFIT()
 ! December 30, 2010
 
 IMPLICIT NONE
-
-
-CHARACTER(120):: fitin, fitout, specin, specout, &
-     inputline, general_line, solar_line, radiance_line
+! Parameters
 INTEGER*4, PARAMETER :: mmax = 64
 INTEGER*4, PARAMETER :: maxpts = 7000
 INTEGER*4, PARAMETER :: maxpix = 2000
 REAL*8, PARAMETER ::pi = 3.14159265358979d0
-LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
-  if_residuals, iterate_sun, weight_sun, if_var_sun (mmax), iterate_rad, &
+LOGICAL :: iterate_sun, weight_sun, if_var_sun (mmax), iterate_rad, &
   weight_rad, renorm, update_pars, if_varied (mmax), iprovar
 REAL*8, DIMENSION(mmax) :: initial, init_sun, var_sun, diffsun, var, diff
 REAL*8, DIMENSION(maxpts) :: pos_sun, spec_sun, sig_sun, spline_sun, &
