@@ -3,7 +3,7 @@ MODULE GASFIT_MODULE
 ! General control input variables
   CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line
   LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, if_residuals
-  INTEGER*4 :: npoints
+  INTEGER*4 :: npoints, nfirstfit
   REAL*8 :: delchi, provar, automult
   
 ! Parameters
@@ -14,6 +14,7 @@ REAL*8, PARAMETER ::pi = 3.14159265358979d0
 
 ! Solar fitting control & variables (read or derived from input control file)
 CHARACTER(256) :: solar_line
+CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: sun_par_names
 LOGICAL :: iterate_sun, weight_sun
 LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_var_sun
 INTEGER*4 :: n_solar_pars, ll_sun, lu_sun, nvar_sun, &
@@ -27,9 +28,10 @@ REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
 
 ! Radiance fitting control & variables (read from input control file)
 CHARACTER(256) :: radiance_line
+CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: par_names
 LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
 LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
-INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, n_rad_pars, nvaried, &
+INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, npars, nvaried, &
      nhw1erad, nshiftrad, nsqueezerad, nshaperad
 REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
 REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff
@@ -73,7 +75,7 @@ REAL*8 :: asum, avg, chisq, &
      dshiftrad, gas, hw1e, remult, rms, rmsavg, &
      shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
 INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-     iteration, j, nfirst,nfirstfit, ngas, npars, nrads
+     iteration, j, nfirst, ngas, nrads
 INTEGER*4, DIMENSION(mmax) :: list_rad
 INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
 REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
@@ -85,6 +87,12 @@ write (*,'(5x, a)') 'enter fitting input file.'
 read (*, '(a)') fitin
 write (*, '(a)') 'Reading file... '//fitin
 open (unit = 21, file = fitin, status='old')
+
+! Open fitting output file.
+if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
+read (*, '(a)') fitout
+write (*, '(a)') 'Opening file... '//fitout
+open (unit = 22, file = fitout, status='unknown')
 
 ! Read general parameters:
 !
@@ -138,7 +146,7 @@ read (21, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
 !
 ! solar_line is a comment that may be echoed in the output.
 !
-! f (iterate_sun) perform wavelength calibration and slit width calibration on
+! if (iterate_sun) perform wavelength calibration and slit width calibration on
 ! the satellite irradiance spectrum for this orbit. Then, perform a wavelength
 ! calibration for one radiance spectrum, selected by nfirstfit (read in below).
 !
@@ -181,17 +189,17 @@ read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun, &
      nhw1e, nshift, nsqueeze, nshape
 ! Now that I know the number of solar fitting variables allocate
 ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars), &
-     init_sun(1:n_solar_pars), list_sun(1:n_solar_pars))
+     init_sun(1:n_solar_pars), list_sun(1:n_solar_pars), sun_par_names(1:n_solar_pars) )
 
 ! Read variables
 do i = 1, n_solar_pars
-  read (21, *) var_sun (i), if_var_sun (i), diffsun (i)
+  read (21, *) j, var_sun(i), if_var_sun(i), diffsun(i), sun_par_names(i)
 end do
 
 ! Automatic difference-taking
 if (autodiff) then
   do i = 1, n_solar_pars
-    if (if_var_sun (i)) diffsun (i) = ABS(automult * var_sun (i))
+    if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
   end do
 end if
 
@@ -206,6 +214,7 @@ do i = 1, n_solar_pars
     list_sun (nvar_sun) = i
   end if
 end do
+
 if (nvar_sun .gt. mmax) then
   write (22, *) ' maximum number of solar parameters exceeded.'
   go to 1000
@@ -254,19 +263,18 @@ if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
 !
 read (21, '(a)') radiance_line
 read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-     div_rad, phase, nreport, report_mult, n_rad_pars, nhw1erad, nshiftrad, &
+     div_rad, phase, nreport, report_mult, npars, nhw1erad, nshiftrad, &
      nsqueezerad, nshaperad
 read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
 
 ! Allocate radiance fitting parameter variables
-ALLOCATE(var(1:n_rad_pars), if_varied(1:n_rad_pars),diff(1:n_rad_pars), &
-     initial(1:n_rad_pars))
+ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), &
+     initial(1:npars), par_names(1:npars))
 
 ! Read variables
-DO i = 1, n_rad_pars
-   read (21, *) var (i), if_varied (i), diff (i)
+DO i = 1, npars
+   read (21, *) j, var(i), if_varied(i), diff(i), par_names(i)
 END DO
-npars = n_rad_pars
 
 ! Automatic difference-taking.
 if (autodiff) then
@@ -301,12 +309,6 @@ if (wrt_scr) write (*, *) 'nshift   =', nshiftrad
 if (wrt_scr) write (*, *) 'nsqueeze =', nsqueezerad
 if (wrt_scr) write (*, *) 'nshape   =', nshaperad
 
-! Open fitting output file.
-if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
-read (*, '(a)') fitout
-write (*, '(a)') 'Opening file... '//fitout
-open (unit = 22, file = fitout, status='unknown')
-
 ! Open irradiance and radiance level 1 file.
 if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
 read (*, '(a)') specin
@@ -332,6 +334,15 @@ do i = 1, npoints
   if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun (i) = 1.d0
 end do
 
+! Write out the input line and other input information.
+IF (write_fit) WRITE (22, '(a)') inputline
+IF (write_fit) CALL write_input ()
+
+DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
+     var, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
+     sun_par_names, par_names)
+stop
+
 ! Initialize several diagnostics.
 ! rmsavg: average fitting rms.
 ! davg: average fitting uncertainty for reported parameter.
@@ -345,10 +356,6 @@ drelavg = 0.d0
 dshiftavg = 0.d0
 nfirst = 0
 
-
-DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
-     var, if_varied, diff, initial, pos_sun, spec_sun, sig_sun)
-stop
 
 ! Read the measured spectra.
 !
@@ -428,14 +435,6 @@ do i = 1, npoints
   sig(i) = 1.d6
   if (i .ge. ll_rad .and. i .le. lu_rad) sig(i) = 1.d0
 end do
-
-! Write out the input line and other input information.
-IF (write_fit) WRITE (22, '(a)') inputline
-IF (write_fit) CALL write_input (npoints, npars, n_solar_pars, nvaried, &
-  nvar_sun, iterate_rad, iterate_sun, weight_rad, weight_sun, if_varied, &
-  if_var_sun, initial, init_sun, nfirst, update_pars, provar, autodiff, &
-  ll_rad, lu_rad, ll_sun, lu_sun, phase, wrt_scr, smooth, renorm, szamax, &
-  szamin, cldmax, latmax, latmin, doas)
 
 ! Perform solar wavelength calibration and slit width fitting:
 ! Calculate avg here, for use in calculated spectra.
@@ -1125,22 +1124,9 @@ end do
 return
 end subroutine mrqcof
 !
-SUBROUTINE write_input (npoints, npars, n_solar_pars, nvaried, nvar_sun, &
-  iterate_rad, iterate_sun, weight_rad, weight_sun, if_varied, if_var_sun, &
-  initial, init_sun, nfirstfit, update_pars, provar, autodiff, ll_rad, lu_rad, &
-  ll_sun, lu_sun, phase, wrt_scr, smooth, renorm, szamax, szamin, &
-  cldmax, latmax, latmin, doas)
+SUBROUTINE write_input()
 
 IMPLICIT NONE
-
-LOGICAL, INTENT(IN) :: iterate_sun, iterate_rad, weight_sun, weight_rad, autodiff, renorm, &
-  update_pars, wrt_scr, smooth, doas
-LOGICAL, DIMENSION(mmax), INTENT(IN) :: if_varied, if_var_sun
-REAL*8, DIMENSION(mmax), INTENT(IN) :: initial, init_sun
-REAL*8, INTENT(IN) :: latmax, latmin, szamax, szamin, phase, provar
-INTEGER*4, INTENT(IN) :: cldmax, ll_sun, lu_sun, ll_rad, lu_rad, nfirstfit, nvar_sun, &
-     nvaried, npoints, npars, n_solar_pars
-
 INTEGER*4 :: i
 save
 
@@ -1183,7 +1169,7 @@ else
 end if
 if (autodiff) then
   write (22, *) 'autodiff enabled; finite differences taken'
-  write (22, *) 'with 0.001 times initial variable.'
+  write (22, '(2x,a,1pE9.3,a)') 'with ', automult, ' times initial variable.'
 end if
 write (22, '(1x, t2, a, t51, 1pe9.3)') &
   'convergence for relative parameter change set at ', provar
@@ -1202,76 +1188,17 @@ write (22, '(a, f8.4)') '  phase =', phase
 
 write (22, *)
 write (22,'(1x, a)') 'Solar Fitting'
-write (22,'(1x, a, /)') '                              baseline parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied'
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline offset', init_sun (1), &
-  if_var_sun (1)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline tilt', init_sun (2), &
-  if_var_sun (2)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline quad.', init_sun (3), &
-  if_var_sun (3)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l, /)') ' baseline cubic', init_sun (4), &
-  if_var_sun (4)
-write (22,'(1x, a, /)') '                              scaling parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied ?'
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling factor', init_sun (5), &
-  if_var_sun (5)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling tilt', init_sun (6), &
-  if_var_sun (6)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling quad.', init_sun (7), &
-  if_var_sun (7)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l, /)') ' scaling cubic', init_sun (8), &
-  if_var_sun (8)
-
-write (22,'(1x, a, /)') '                             spectral parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied ?'
-do i = 9, n_solar_pars, 4
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', init_sun (i), &
-    if_var_sun (i)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', init_sun (i + 1), &
-    if_var_sun (i + 1)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', init_sun (i + 2), &
-    if_var_sun (i + 2)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', init_sun (i + 3), &
-    if_var_sun (i + 3)
-end do
+write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
+DO i = 1, n_solar_pars
+   write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(sun_par_names(i)), init_sun(i), if_var_sun(i)
+END DO
 
 write (22, *)
-write (22,'(1x, a, /)') 'Radiance Fitting'
-write (22,'(1x, a, /)') '                              baseline parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied'
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline offset', initial (1), &
-  if_varied (1)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline tilt', initial (2), &
-  if_varied (2)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' baseline quad.', initial (3), &
-  if_varied (3)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l, /)') ' baseline cubic', initial (4), &
-  if_varied (4)
-write (22,'(1x, a, /)') '                              scaling parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied ?'
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling factor', initial (5), &
-  if_varied (5)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling tilt', initial (6), &
-  if_varied (6)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling quad.', initial (7), &
-  if_varied (7)
-write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' scaling cubic', initial (8), &
-  if_varied (8)
-
-write (22, *)
-write (22,'(1x, a, /)') '                             spectral parameters'
-write (22,'(1x, a)') '    parameter     initial value  varied ?'
-do i = 9, npars, 4
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', initial (i), &
-    if_varied (i)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', initial (i + 1), &
-    if_varied (i + 1)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l)') ' parameter', initial (i + 2), &
-    if_varied (i + 2)
-  write (22,'(1x,t1,a,t20,1pe14.7,t37,l,/)') ' parameter', initial (i + 3), &
-    if_varied (i + 3)
-end do
+write (22,'(1x, a)') 'Radiance Fitting'
+write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
+DO i = 1, npars
+   write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(par_names(i)), initial(i), if_varied(i)
+END DO
 write (22, *)
 
 return
