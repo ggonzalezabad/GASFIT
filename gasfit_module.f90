@@ -3,7 +3,9 @@ MODULE GASFIT_MODULE
 ! General control input variables
   CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line
   LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, if_residuals
-
+  INTEGER*4 :: npoints
+  REAL*8 :: delchi, provar, automult
+  
 ! Parameters
 INTEGER*4, PARAMETER :: mmax = 64
 INTEGER*4, PARAMETER :: maxpts = 7000
@@ -20,14 +22,18 @@ INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
 REAL*8 :: div_sun
 REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun
 
+! Solar spectrum
+REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
+
 ! Radiance fitting control & variables (read from input control file)
-CHARACTER(300) :: radiance_line
+CHARACTER(256) :: radiance_line
 LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
 LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
 INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, n_rad_pars, nvaried, &
      nhw1erad, nshiftrad, nsqueezerad, nshaperad
 REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
 REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff
+
 
 CONTAINS
 SUBROUTINE GASFIT()
@@ -56,18 +62,18 @@ SUBROUTINE GASFIT()
 
 IMPLICIT NONE
 LOGICAL :: iprovar
-REAL*8, DIMENSION(maxpts) :: pos_sun, spec_sun, sig_sun, spline_sun, &
+REAL*8, DIMENSION(maxpts) :: spline_sun, &
      deriv2sun, pos, spec, sig, fit, temp, residual
 REAL*8, DIMENSION(2,maxpts) :: underspec
 REAL*8, DIMENSION(11,maxpts) :: database
 REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
 REAL*8, DIMENSION(mmax,mmax) :: correl, covar
-REAL*8 :: asum, automult, avg, chisq, &
-     davg, delchi, dgas, dhw1e, drelavg, dshift, dshiftavg, &
-     dshiftrad, gas, hw1e, provar, remult, rms, rmsavg, &
+REAL*8 :: asum, avg, chisq, &
+     davg,  dgas, dhw1e, drelavg, dshift, dshiftavg, &
+     dshiftrad, gas, hw1e, remult, rms, rmsavg, &
      shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
 INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-     iteration, j, nfirst,nfirstfit, ngas, npars, npoints, nrads
+     iteration, j, nfirst,nfirstfit, ngas, npars, nrads
 INTEGER*4, DIMENSION(mmax) :: list_rad
 INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
 REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
@@ -77,6 +83,7 @@ residual = 0.d0
 
 write (*,'(5x, a)') 'enter fitting input file.'
 read (*, '(a)') fitin
+write (*, '(a)') 'Reading file... '//fitin
 open (unit = 21, file = fitin, status='old')
 
 ! Read general parameters:
@@ -250,9 +257,6 @@ read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
      div_rad, phase, nreport, report_mult, n_rad_pars, nhw1erad, nshiftrad, &
      nsqueezerad, nshaperad
 read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
-print*, iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-     div_rad, phase, nreport, report_mult, n_rad_pars, nhw1erad, nshiftrad, &
-     nsqueezerad, nshaperad
 
 ! Allocate radiance fitting parameter variables
 ALLOCATE(var(1:n_rad_pars), if_varied(1:n_rad_pars),diff(1:n_rad_pars), &
@@ -300,16 +304,13 @@ if (wrt_scr) write (*, *) 'nshape   =', nshaperad
 ! Open fitting output file.
 if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
 read (*, '(a)') fitout
+write (*, '(a)') 'Opening file... '//fitout
 open (unit = 22, file = fitout, status='unknown')
-
-
-DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
-     var, if_varied, diff, initial)
-stop
 
 ! Open irradiance and radiance level 1 file.
 if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
 read (*, '(a)') specin
+write (*, '(a)') 'Opening file... '//specin
 open (unit = 23, file = specin, status='old')
 
 ! Open spectrum output file.
@@ -321,12 +322,13 @@ end if
 
 ! Read the solar spectrum. A 2-column (position and irradiance value) spectrum
 ! of npoints points, with no header, is expected.
+ALLOCATE(pos_sun(1:npoints), spec_sun(1:npoints), sig_sun(1:npoints))
 do i = 1, npoints
   read (23, *) pos_sun (i), spec_sun (i)
 ! divide to avoid overflow issues.
   spec_sun (i) = spec_sun (i) / div_sun
 ! select fitting window by the use of weighting.
-  sig_sun (i) = 1.d6
+  sig_sun (i) = 1.d30
   if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun (i) = 1.d0
 end do
 
@@ -342,6 +344,11 @@ davg = 0.d0
 drelavg = 0.d0
 dshiftavg = 0.d0
 nfirst = 0
+
+
+DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
+     var, if_varied, diff, initial, pos_sun, spec_sun, sig_sun)
+stop
 
 ! Read the measured spectra.
 !
