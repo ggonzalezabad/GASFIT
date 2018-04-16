@@ -6,6 +6,12 @@ MODULE GASFIT_MODULE
   LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
        if_residuals
 
+! Parameters
+INTEGER*4, PARAMETER :: mmax = 64
+INTEGER*4, PARAMETER :: maxpts = 7000
+INTEGER*4, PARAMETER :: maxpix = 2000
+REAL*8, PARAMETER ::pi = 3.14159265358979d0
+
 CONTAINS
 SUBROUTINE GASFIT()
 
@@ -32,11 +38,6 @@ SUBROUTINE GASFIT()
 ! December 30, 2010
 
 IMPLICIT NONE
-! Parameters
-INTEGER*4, PARAMETER :: mmax = 64
-INTEGER*4, PARAMETER :: maxpts = 7000
-INTEGER*4, PARAMETER :: maxpix = 2000
-REAL*8, PARAMETER ::pi = 3.14159265358979d0
 LOGICAL :: iterate_sun, weight_sun, if_var_sun (mmax), iterate_rad, &
   weight_rad, renorm, update_pars, if_varied (mmax), iprovar
 REAL*8, DIMENSION(mmax) :: initial, init_sun, var_sun, diffsun, var, diff
@@ -1095,9 +1096,6 @@ SUBROUTINE write_input (npoints, npars, n_solar_pars, nvaried, nvar_sun, &
   cldmax, latmax, latmin, doas)
 
 IMPLICIT NONE
-
-INTEGER*4, PARAMETER :: mmax = 64
-INTEGER*4, PARAMETER :: maxpts = 7000
 
 LOGICAL, INTENT(IN) :: iterate_sun, iterate_rad, weight_sun, weight_rad, autodiff, renorm, &
   update_pars, wrt_scr, smooth, doas
