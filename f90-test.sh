@@ -3,7 +3,7 @@ gfortran -g -fbacktrace -fcheck=all -Wall -o gasbeta.exe main.o gasfit_module.o
 
 
 ./gasbeta.exe << EOF
-gasbeta_csic_io.inp
+gasfit_ace_io.inp
 test_output.txt
 ace_zn_vis_2017_01_16_gasbeta.txt
 test_spectrum_output.txt
