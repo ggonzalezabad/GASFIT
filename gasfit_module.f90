@@ -7,1123 +7,1246 @@ MODULE GASFIT_MODULE
   REAL*8 :: delchi, provar, automult
   
 ! Parameters
-INTEGER*4, PARAMETER :: mmax = 64
-INTEGER*4, PARAMETER :: maxpts = 7000
-INTEGER*4, PARAMETER :: maxpix = 2000
-REAL*8, PARAMETER ::pi = 3.14159265358979d0
+  INTEGER*4, PARAMETER :: mmax = 64
+  INTEGER*4, PARAMETER :: maxpts = 7000
+  INTEGER*4, PARAMETER :: maxpix = 2000
+  REAL*8, PARAMETER ::pi = 3.14159265358979d0
+
+! High resolution solar spectrum variables
+  REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
 
 ! Solar fitting control & variables (read or derived from input control file)
-CHARACTER(256) :: solar_line
-CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: sun_par_names
-LOGICAL :: iterate_sun, weight_sun
-LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_var_sun
-INTEGER*4 :: n_solar_pars, ll_sun, lu_sun, nvar_sun, &
-     nhw1e, nshift, nsqueeze, nshape
-INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
-REAL*8 :: div_sun
-REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun
+  CHARACTER(256) :: solar_line
+  CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: sun_par_names
+  CHARACTER(3), ALLOCATABLE, DIMENSION(:) :: sun_par_str
+  LOGICAL :: iterate_sun, weight_sun
+  LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_var_sun
+  INTEGER*4 :: n_solar_pars, ll_sun, lu_sun, nvar_sun, &
+       nalb, nhwe, nshi, nsqe, nsha, nasy
+  INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
+  REAL*8 :: div_sun
+  REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun, var_sun_factor
+  CHARACTER(3), PARAMETER :: alb_str='ALB', hwe_str='HWE', shi_str='SHI', &
+       sqe_str='SQE', sha_str='SHA', asy_str='ASY', bsp_str='Bsp', scp_str='Scp'
 
 ! Solar spectrum
-REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
+  REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
 
 ! Radiance fitting control & variables (read from input control file)
-CHARACTER(256) :: radiance_line
-CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: par_names
-LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
-LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
-INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, npars, nvaried, &
-     nhw1erad, nshiftrad, nsqueezerad, nshaperad
-REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
-REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff
+  CHARACTER(256) :: radiance_line
+  CHARACTER(30), ALLOCATABLE, DIMENSION(:) :: par_names
+  CHARACTER(3), ALLOCATABLE, DIMENSION(:) :: par_str
+  LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
+  LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
+  INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, npars, nvaried, &
+       nhw1erad, nshiftrad, nsqueezerad, nshaperad
+  REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
+  REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff, var_factor
 
+! Variables for fit. To be allocated depending on the number of
+  ! spectral pixels and parameters before each call to specfit
+  REAL*8, ALLOCATABLE, DIMENSION(:,:) :: correl, covar, alpha
+  INTEGER*4 :: iteration
+  REAL*8 :: rms, chisq
 
 CONTAINS
-SUBROUTINE GASFIT()
 
-! Fits an orbit of satellite-measured Earth radiance spectra, or a sequence of
-! ground-based atmospheric spectra.
-!
-! This version of the gas fitting code includes the option to do BOAS or DOAS
-! fitting, that is to fit radiances directly, or to fit a high-pass filtered
-! logarithm of (radiance / irradiance). BOAS normally gives an improvement of a
-! factor of 2-3 in the fitting statistics, with average parameter values very
-! close to the same. DOAS usually runs somewhat faster.
+  SUBROUTINE GASFIT()
+    ! Fits an orbit of satellite-measured Earth radiance spectra, or a sequence of
+    ! ground-based atmospheric spectra.
+    !
+    ! This version of the gas fitting code includes the option to do BOAS or DOAS
+    ! fitting, that is to fit radiances directly, or to fit a high-pass filtered
+    ! logarithm of (radiance / irradiance). BOAS normally gives an improvement of a
+    ! factor of 2-3 in the fitting statistics, with average parameter values very
+    ! close to the same. DOAS usually runs somewhat faster.
+    
+    ! Please communicate any corrections, additions and improvements:
+    
+    ! Kelly Chance
+    ! Atomic and Molecular Physics Division
+    ! Harvard-Smithsonian Center for Astrophysics
+    ! 60 Garden Street
+    ! Cambridge, MA 02138, USA
+    ! phone +1-617-495-7389
+    ! e-mail kchance@cfa.harvard.edu
+    ! http://cfa-www.harvard.edu/~kchance/
+    
+    ! December 30, 2010
 
-! Please communicate any corrections, additions and improvements:
-
-! Kelly Chance
-! Atomic and Molecular Physics Division
-! Harvard-Smithsonian Center for Astrophysics
-! 60 Garden Street
-! Cambridge, MA 02138, USA
-! phone +1-617-495-7389
-! e-mail kchance@cfa.harvard.edu
-! http://cfa-www.harvard.edu/~kchance/
-
-! December 30, 2010
-
-IMPLICIT NONE
-LOGICAL :: iprovar
-REAL*8, DIMENSION(maxpts) :: spline_sun, &
-     deriv2sun, pos, spec, sig, fit, temp, residual
-REAL*8, DIMENSION(2,maxpts) :: underspec
-REAL*8, DIMENSION(11,maxpts) :: database
-REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
-REAL*8, DIMENSION(mmax,mmax) :: correl, covar
-REAL*8 :: asum, avg, chisq, &
-     davg,  dgas, dhw1e, drelavg, dshift, dshiftavg, &
-     dshiftrad, gas, hw1e, remult, rms, rmsavg, &
-     shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
-INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-     iteration, j, nfirst, ngas, nrads
-INTEGER*4, DIMENSION(mmax) :: list_rad
-INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
-REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
-
-! Initialize the residual spectrum here.
-residual = 0.d0
-
-write (*,'(5x, a)') 'enter fitting input file.'
-read (*, '(a)') fitin
-write (*, '(a)') 'Reading file... '//fitin
-open (unit = 21, file = fitin, status='old')
-
-! Open fitting output file.
-if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
-read (*, '(a)') fitout
-write (*, '(a)') 'Opening file... '//fitout
-open (unit = 22, file = fitout, status='unknown')
-
-! Read general parameters:
-!
-! inputline and general_line are comments that may be echoed in the output.
-!
-! npoints is the number of spectral points in the irradiance and each radiance.
-!
-! delchi and provar are fitting convergence criteria: a change in chi-squared
-! and a relative change in each fitted parameter. Automult factor to calculate
-! fitting variable variations in optimization.
-!
-! If (wrt_scr) enter a more verbose manner of running.
-!
-! If (smooth) smooth the spectra and reference spectra before fitting. not
-! recommended, but implemented for comparison with results of colleagues who
-! smooth rather than correct for spectral undersampling.
-!
-! If (write_fit) write conditions and diagnostics to an output file. this is
-! not the same as writing out the fitting results, which is done automatically.
-!
-! If (write_spec) write measured spectrum out???
-!
-! If (mirror) mirror the input file onto the output file, with updated
-! parameters. Useful for tuning fitting parameters, particularly when
-! optimizing by using one spectrum.
-!
-! If (autodiff) ignore the input parameter differences used for finite
-! differencing to calculate jacobian matrix elements and use abs (automult *
-! parameter) instead. Experience shows that this is most often a reasonable
-! approach to fitting, provided no initial parameter guesses are zero or very
-! close to it.
-!
-! If (doas) then do a DOAS (differential optical absorption spectroscopy) fit
-! rather than a BOAS (basic optical absorption spectroscopy) fit. Useful to
-! compare results and processing speed. DOAS was developed for ground-based
-! measurements where the baseline could not reliably be fitted. For satellite
-! measurements it is normally not necessary nor an improvement to the fitting
-! results.
-!
-! If (if_residuals) write out the averaged fitting residual at the end of the
-! spectral fitting results. Used to generate the "common mode" correction for
-! systematic fitting residuals initially implemented at SAO.
-!
-read (21, '(a)') inputline
-read (21, '(a)') general_line
-read (21, *) npoints, delchi, provar, automult
-read (21, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
-  if_residuals
-
-! Read solar fitting parameters:
-!
-! solar_line is a comment that may be echoed in the output.
-!
-! if (iterate_sun) perform wavelength calibration and slit width calibration on
-! the satellite irradiance spectrum for this orbit. Then, perform a wavelength
-! calibration for one radiance spectrum, selected by nfirstfit (read in below).
-!
-! f (weight_sun) make the fit a weighted fit, with highly-weighted wavelength
-! selected by ll_sun and lu_sun. This is used to select the active fitting
-! region, weighted as 1, whereas the inactive region is de-weighted by (1.d6)**2
-!
-! n_solar_pars is the number of solar fitting parameters to read, normally 12.
-! this separates the solar parameters from the radiance fitting controls and
-! parameters which come afterward. Parameters are grouped in fours, a legacy
-! from when my fitting code was developed to analyze laboratory spectrum. each
-! line in a spectrum required (1) a gaussian (doppler) width; (2) a lorentzian
-! (pressure broadening and/or lifetime) width; (3) an intensity; and (4) a
-! position in frequency (usually MHz, GHz, THz, or cm-1) space. I find that
-! maintaining the grouping by fours is convenient for atmospheric spectral
-! analysis, even though it means some potential parameters are unused.
-!
-! ll_sun and lu_sun select the active fitting region. They are integers which
-! select the fitting location in detector pixel space from the 1-npoints
-! wavelength in the spectrum.
-!
-! div_sun divides the irradiance spectrum by a (usually large) number to avoid
-! potential arithmetical overflow problems.
-!
-! var_sun are the solar fitting variables, normally describing a cubic baseline
-! polynomial, a cubic overall scaling polynomial, an "albedo" (intensity
-! multiplier), slit width (hw1/e), spectral wavelength shift and spectral
-! (accordion) squeeze. Normally, parameter 5 (the zeroth order scaling term)
-! and parameter 9, the intensity multiplier are not varied simultaneously since
-! they are very highly correlated.
-!
-! If (if_var_sun (i)) vary parameter (i) in the fitting.
-!
-! diffsun (i) is the difference in parameter (i) used to calculate the jacobian
-! matrix element for parameters (i). If autodiff is true, diffsun (i) is
-! ignored and 0.001 * abs (var_sun (i)) is used instead.
-!
-read (21, '(a)') solar_line
-read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun, &
-     nhw1e, nshift, nsqueeze, nshape
-! Now that I know the number of solar fitting variables allocate
-ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars), &
-     init_sun(1:n_solar_pars), list_sun(1:n_solar_pars), sun_par_names(1:n_solar_pars) )
-
-! Read variables
-do i = 1, n_solar_pars
-  read (21, *) j, var_sun(i), if_var_sun(i), diffsun(i), sun_par_names(i)
-end do
-
-! Automatic difference-taking
-if (autodiff) then
-  do i = 1, n_solar_pars
-    if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
-  end do
-end if
-
-! Order the parameters for mrqmin (housekeeping for the fitting process) and
-! save the initial values of the parameters, in case they are required at some
-! later stage. At present, just used in writing the fitting output file.
-nvar_sun = 0
-do i = 1, n_solar_pars
-  init_sun (i) = var_sun (i)
-  if (if_var_sun (i)) then
-    nvar_sun = nvar_sun + 1
-    list_sun (nvar_sun) = i
-  end if
-end do
-
-if (nvar_sun .gt. mmax) then
-  write (22, *) ' maximum number of solar parameters exceeded.'
-  go to 1000
-end if
-if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
-
-! Read radiance fitting parameters:
-!
-! radiance_line is a comment that may be echoed in the output.
-!
-! If (iterate_rad) fit the radiances.
-!
-! If (renorm) renormalize radiances to their weighted average before fitting.
-! Numerical overflow insurance. Good for BOAS, don't normally use with DOAS.
-!
-! If (weight_rad) ) make the fit a weighted fit, as with weight_sun.
-!
-! If (update_pars) use the parameters from fitting radiance n as the initial
-! guesses for fitting radiance n+1.
-!
-! ll_rad and lu_rad select the active fitting region.
-!
-! div_rad divides the radiance spectra by a (usually large) number to avoid
-! potential arithmetical overflow problems.
-!
-! phase is a (non-fitted) parameter controlling the calculation of the
-! correction for spectral undersampling. See subroutine undersample and
-! Applied Optics 44, 1296-1304, 2005 for more detail.
-!
-! nreport is the parameter number outputted to the fitting output file.
-! report_mult is a multiplier for its value and fitting uncertainty. report_mult
-! is required because the reference spectra are scaled (below) to avoid
-! potential numerical underflow issues. The fitted parameter values must be
-! scaled by the  same amount (if (.not. doas)). If (doas), report_mult should be
-! the negative of the scalar for the reported parameter.
-!
-! Ground pixels (scenes) with solar zenith angle (sza) <= szamax, (sza) => szamin,
-! latitudes <= latmax, and latitudes >= latmin are analyzed.
-!
-! Maximum cloud index clasification (cldmax). Only process pixels with
-! (cloud index) <= cldmax.
-!
-! nfirstfit is the number of the radiance (counting consecutively along the
-! orbit, as given by ipix) to fit for wavelength in order to establish a
-! standard wavelength grid and sample the reference spectra.
-!
-read (21, '(a)') radiance_line
-read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-     div_rad, phase, nreport, report_mult, npars, nhw1erad, nshiftrad, &
-     nsqueezerad, nshaperad
-read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
-
-! Allocate radiance fitting parameter variables
-ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), &
-     initial(1:npars), par_names(1:npars))
-
-! Read variables
-DO i = 1, npars
-   read (21, *) j, var(i), if_varied(i), diff(i), par_names(i)
-END DO
-
-! Automatic difference-taking.
-if (autodiff) then
-  do i = 1, npars
-    if (if_varied (i)) diff (i) = dabs (automult * var (i))
-  end do
-end if
-
-! Order the coefficients for mrqmin and save the initial values of the
-! coefficients.
-nvaried = 0
-do i = 1, npars
-  initial (i) = var (i)
-  if (if_varied (i)) then
-    nvaried = nvaried + 1
-    list_rad (nvaried) = i
-    if (i .eq. nreport) ngas = nvaried
-  end if
-end do
-if (nvaried .gt. mmax) then
-  write (22, *) ' maximum number of radiance parameters exceeded.'
-  go to 1000
-end if
-if (wrt_scr) write (*, *) 'nvaried  =', nvaried
-if (wrt_scr) write (*, *) 'Max. sza =', szamax
-if (wrt_scr) write (*, *) 'Min. sza =', szamin
-if (wrt_scr) write (*, *) 'Max. lat =', latmax
-if (wrt_scr) write (*, *) 'Min. lat =', latmin
-if (wrt_scr) write (*, *) 'Max. cld =', cldmax
-if (wrt_scr) write (*, *) 'nhw1e    =', nhw1erad
-if (wrt_scr) write (*, *) 'nshift   =', nshiftrad
-if (wrt_scr) write (*, *) 'nsqueeze =', nsqueezerad
-if (wrt_scr) write (*, *) 'nshape   =', nshaperad
-
-! Open irradiance and radiance level 1 file.
-if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
-read (*, '(a)') specin
-write (*, '(a)') 'Opening file... '//specin
-open (unit = 23, file = specin, status='old')
-
-! Open spectrum output file.
-if (write_spec) then
-  if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
-  read (*, '(a)') specout
-  open (unit = 24, file = specout, status='unknown')
-end if
-
-! Read the solar spectrum. A 2-column (position and irradiance value) spectrum
-! of npoints points, with no header, is expected.
-ALLOCATE(pos_sun(1:npoints), spec_sun(1:npoints), sig_sun(1:npoints))
-do i = 1, npoints
-  read (23, *) pos_sun (i), spec_sun (i)
-! divide to avoid overflow issues.
-  spec_sun (i) = spec_sun (i) / div_sun
-! select fitting window by the use of weighting.
-  sig_sun (i) = 1.d30
-  if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun (i) = 1.d0
-end do
-
-! Write out the input line and other input information.
-IF (write_fit) WRITE (22, '(a)') inputline
-IF (write_fit) CALL write_input ()
-
-DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
-     var, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
-     sun_par_names, par_names)
-stop
-
-! Initialize several diagnostics.
-! rmsavg: average fitting rms.
-! davg: average fitting uncertainty for reported parameter.
-! drelavg: average relative fitting uncertainty for reported parameter.
-! dshiftavg:  average fitting uncertainty for spectral shift parameter.
-! nfirst is the number among fitted radiances corresponding to the ground pixel
-! nfirstfit.
-rmsavg = 0.d0
-davg = 0.d0
-drelavg = 0.d0
-dshiftavg = 0.d0
-nfirst = 0
-
-
-! Read the measured spectra.
-!
-! ipix: The number of the radiance, counting consecutively along the orbit.
-!
-! iyear (Year data was collected), imonth (Month data was collected), iday 
-! (Day data was collected), ihour (Hour data wav collected), imin 
-! (Minuted data was collected) and isec (Second data was collected)
-!
-! ilat (Latitude data was collected), ilon
-! 1 is normally selected when we extract data from a GOME el1 file. Because of
-! longer integration times when the light conditions are low, sometimes our
-! selected band has not been read out, and we need to skip over these ground
-! pixels.
-!
-! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
-!
-! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
-! east/west edges and center of ground pixel.
-!
-! zs, re: Satellite height and earth radius for each ground pixel measurement.
-!
-! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
-! longitudes for 4 corners and center of ground pixel.
-!
-i = 1
-40 READ (23, *, end = 50) ipix, icld
-  READ (23, *) iyear, imonth, iday, ihour, imin, isec
-  READ (23, *) ilat, ilon
-  READ (23, *) isza, isaa, ivza, ivaa
-
-! Decide whether to process. If so, update the appropriate arrays and the
-! counter for radiances being fitted.
-  IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
-       (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
-     npix(i) = ipix
-     cld(i) = icld
-     year(i) = iyear
-     month(i) = imonth
-     day(i) = iday
-     hour(i) = ihour
-     minu(i) = imin
-     sec(i) = isec
-     sza(i) = isza
-     saa(i) = isaa
-     vza(i) = ivza
-     vaa(i) = ivaa
-     lat(i) = ilat
-     lon(i) = ilon
-     !   Read radiance spectrum (positions and radiances) for each ground pixel.
-     do j = 1, npoints
-        read (23, *) pos_rad (i, j), spec_rad (i, j)
-        spec_rad (i, j) = spec_rad (i, j) / div_rad ! usually 1.d13 or 1.d14
-     end do
-     !   Is this the pixel selected for full wavelength calibration?
-     if (ipix .eq. nfirstfit) nfirst = i
-     i = i + 1
-     !   Ignore spectra not selected for processing.
-  else 
-     do j = 1, npoints
-        read (23, *)
-     end do
-  end if
-  go to 40
-50 nrads = i - 1
-  if (nrads .eq. 0) then
-     write (*, *) 'nrads = 0'
-     stop
-  end if
-
-! if there is no spectrum corresponding to nfirstfit, select nfirst halfway
-! along the orbit.
-if (nfirst .eq. 0) nfirst = CEILING(FLOAT(nrads)/2.0)
-
-! Add the weighting, in the single array.
-do i = 1, npoints
-  sig(i) = 1.d6
-  if (i .ge. ll_rad .and. i .le. lu_rad) sig(i) = 1.d0
-end do
-
-! Perform solar wavelength calibration and slit width fitting:
-! Calculate avg here, for use in calculated spectra.
-if (.not. weight_sun) then
-  avg = (pos_sun (npoints) + pos_sun (1)) / 2.
-else
-  asum = 0.
-  ssum = 0.
-  do i = 1, npoints
-    asum = asum + pos_sun (i) / (sig_sun (i)**2)
-    ssum = ssum + 1. / (sig_sun (i)**2)
-  end do
-  avg = asum / ssum
-end if
-if (wrt_scr) write (*, *) ' avg = ', avg
-
-! Calculate and iterate on the irradiance spectrum. The flag for convergence
-! from lack of change in the variables, iprovar, is set to .false. before
-! iteration begins.
-iprovar = .false.
-if (iterate_sun) then
-  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, &
-  iteration, smooth, avg, spec_sun, pos_sun, sig_sun, fit, var_sun, chisq, &
-  delchi, diffsun, correl, covar, rms, provar, iprovar, wrt_scr, 1, database, &
-  doas)
-print*, iprovar
-stop
-! Shift and squeeze solar spectrum.
-  do i = 1, npoints
-    pos_sun (i) = (pos_sun (i) - var_sun (11)) / (1.d0 + var_sun (12))
-  end do
-  dshift = rms * sqrt (covar (nshift, nshift) * float (npoints) / &
-    float (npoints - nvar_sun))
-  write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
-  write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (11), dshift
-  write (*, *) 'nvar_sun = ', nvar_sun
-
-! Freeze variation of slit width for radiance fitting is not currently
-! implemented.
-! if_var_sun (10) = .false.
-
-! Set width for later use in undersampling correction. hw1e means the gaussian
-! half-width at 1/e of the maximum intensity.
-  hw1e = var_sun (10)
-  dhw1e = rms * sqrt (covar (nhw1e, nhw1e) * float (npoints) / &
-    float (npoints - nvar_sun))
-  write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
-
-! Order the coefficients for mrqmin and save the initial values of the
-! coefficients (uncomment if slit variation freeze is to be implemented).
-! nvar_sun = 0
-! do i = 1, n_solar_pars
-!   init_sun (i) = var_sun (i)
-!   if (if_var_sun (i)) then
-!     nvar_sun = nvar_sun + 1
-!     list_sun (nvar_sun) = i
-!   end if
-! end do
-
-! Select and wavelength calibrate selected radiance spectrum.
-  write (*, *) ' nfirst = ', nfirst
-  do i = 1, npoints
-    pos (i) = pos_rad (nfirst, i)
-    spec (i) = spec_rad (nfirst, i)
-  end do
-  if (.not. weight_sun) then
-    avg = (pos (npoints) + pos (1)) / 2.
-  else
-    asum = 0.
-    ssum = 0.
+    IMPLICIT NONE
+    LOGICAL :: iprovar
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: fit
+    REAL*8, DIMENSION(maxpts) :: spline_sun, &
+         deriv2sun, pos, spec, sig, temp, residual
+    REAL*8, DIMENSION(2,maxpts) :: underspec
+    REAL*8, DIMENSION(11,maxpts) :: database
+    REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
+    REAL*8 :: asum, avg, &
+         davg,  dgas, dhw1e, drelavg, dshift, dshiftavg, &
+         dshiftrad, gas, hw1e, remult, rmsavg, &
+         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
+    INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
+         j, nfirst, ngas, nrads
+    INTEGER*4, DIMENSION(mmax) :: list_rad
+    INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
+    REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
+    
+    ! Initialize the residual spectrum here.
+    residual = 0.d0
+    
+    write (*,'(5x, a)') 'enter fitting input file.'
+    read (*, '(a)') fitin
+    write (*, '(a)') 'Reading file... '//fitin
+    open (unit = 21, file = fitin, status='old')
+    
+    ! Open fitting output file.
+    if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
+    read (*, '(a)') fitout
+    write (*, '(a)') 'Opening file... '//fitout
+    open (unit = 22, file = fitout, status='unknown')
+    
+    ! Read general parameters:
+    !
+    ! inputline and general_line are comments that may be echoed in the output.
+    !
+    ! npoints is the number of spectral points in the irradiance and each radiance.
+    !
+    ! delchi and provar are fitting convergence criteria: a change in chi-squared
+    ! and a relative change in each fitted parameter. Automult factor to calculate
+    ! fitting variable variations in optimization.
+    !
+    ! If (wrt_scr) enter a more verbose manner of running.
+    !
+    ! If (smooth) smooth the spectra and reference spectra before fitting. not
+    ! recommended, but implemented for comparison with results of colleagues who
+    ! smooth rather than correct for spectral undersampling.
+    !
+    ! If (write_fit) write conditions and diagnostics to an output file. this is
+    ! not the same as writing out the fitting results, which is done automatically.
+    !
+    ! If (write_spec) write measured spectrum out???
+    !
+    ! If (mirror) mirror the input file onto the output file, with updated
+    ! parameters. Useful for tuning fitting parameters, particularly when
+    ! optimizing by using one spectrum.
+    !
+    ! If (autodiff) ignore the input parameter differences used for finite
+    ! differencing to calculate jacobian matrix elements and use abs (automult *
+    ! parameter) instead. Experience shows that this is most often a reasonable
+    ! approach to fitting, provided no initial parameter guesses are zero or very
+    ! close to it.
+    !
+    ! If (doas) then do a DOAS (differential optical absorption spectroscopy) fit
+    ! rather than a BOAS (basic optical absorption spectroscopy) fit. Useful to
+    ! compare results and processing speed. DOAS was developed for ground-based
+    ! measurements where the baseline could not reliably be fitted. For satellite
+    ! measurements it is normally not necessary nor an improvement to the fitting
+    ! results.
+    !
+    ! If (if_residuals) write out the averaged fitting residual at the end of the
+    ! spectral fitting results. Used to generate the "common mode" correction for
+    ! systematic fitting residuals initially implemented at SAO.
+    !
+    read (21, '(a)') inputline
+    read (21, '(a)') general_line
+    read (21, *) npoints, delchi, provar, automult
+    read (21, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
+         if_residuals
+    
+    ! Read solar fitting parameters:
+    !
+    ! solar_line is a comment that may be echoed in the output.
+    !
+    ! if (iterate_sun) perform wavelength calibration and slit width calibration on
+    ! the satellite irradiance spectrum for this orbit. Then, perform a wavelength
+    ! calibration for one radiance spectrum, selected by nfirstfit (read in below).
+    !
+    ! f (weight_sun) make the fit a weighted fit, with highly-weighted wavelength
+    ! selected by ll_sun and lu_sun. This is used to select the active fitting
+    ! region, weighted as 1, whereas the inactive region is de-weighted by (1.d6)**2
+    !
+    ! n_solar_pars is the number of solar fitting parameters to read, normally 12.
+    ! this separates the solar parameters from the radiance fitting controls and
+    ! parameters which come afterward. Parameters are grouped in fours, a legacy
+    ! from when my fitting code was developed to analyze laboratory spectrum. each
+    ! line in a spectrum required (1) a gaussian (doppler) width; (2) a lorentzian
+    ! (pressure broadening and/or lifetime) width; (3) an intensity; and (4) a
+    ! position in frequency (usually MHz, GHz, THz, or cm-1) space. I find that
+    ! maintaining the grouping by fours is convenient for atmospheric spectral
+    ! analysis, even though it means some potential parameters are unused.
+    !
+    ! ll_sun and lu_sun select the active fitting region. They are integers which
+    ! select the fitting location in detector pixel space from the 1-npoints
+    ! wavelength in the spectrum.
+    !
+    ! div_sun divides the irradiance spectrum by a (usually large) number to avoid
+    ! potential arithmetical overflow problems.
+    !
+    ! var_sun are the solar fitting variables, normally describing a cubic baseline
+    ! polynomial, a cubic overall scaling polynomial, an "albedo" (intensity
+    ! multiplier), slit width (hw1/e), spectral wavelength shift and spectral
+    ! (accordion) squeeze. Normally, parameter 5 (the zeroth order scaling term)
+    ! and parameter 9, the intensity multiplier are not varied simultaneously since
+    ! they are very highly correlated.
+    !
+    ! If (if_var_sun (i)) vary parameter (i) in the fitting.
+    !
+    ! diffsun (i) is the difference in parameter (i) used to calculate the jacobian
+    ! matrix element for parameters (i). If autodiff is true, diffsun (i) is
+    ! ignored and 0.001 * abs (var_sun (i)) is used instead.
+    !
+    read (21, '(a)') solar_line
+    read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun
+    ! Now that I know the number of solar fitting variables allocate
+    ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars), &
+         init_sun(1:n_solar_pars), list_sun(1:n_solar_pars), sun_par_names(1:n_solar_pars), &
+         sun_par_str(1:n_solar_pars), var_sun_factor(1:n_solar_pars))
+    
+    ! Read variables
+    do i = 1, n_solar_pars
+       read (21, *) j, var_sun(i), if_var_sun(i), diffsun(i), &
+            sun_par_str(i), var_sun_factor(i), sun_par_names(i)
+       print*, j, var_sun(i), if_var_sun(i), diffsun(i),&
+            sun_par_str(i), var_sun_factor(i), trim(sun_par_names(i))
+    end do
+    
+    ! Use strings to assign specific fitting parameter indices
+    do i = 1, n_solar_pars
+       IF (sun_par_str(i) .EQ. alb_str) nalb = i 
+       IF (sun_par_str(i) .EQ. hwe_str) nhwe = i 
+       IF (sun_par_str(i) .EQ. shi_str) nshi = i 
+       IF (sun_par_str(i) .EQ. sqe_str) nsqe = i 
+       IF (sun_par_str(i) .EQ. sha_str) nsha = i 
+       IF (sun_par_str(i) .EQ. asy_str) nasy = i 
+    end do
+    
+    ! Automatic difference-taking
+    if (autodiff) then
+       do i = 1, n_solar_pars
+          if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
+       end do
+    end if
+    
+    ! Order the parameters for mrqmin (housekeeping for the fitting process) and
+    ! save the initial values of the parameters, in case they are required at some
+    ! later stage. At present, just used in writing the fitting output file.
+    nvar_sun = 0
+    do i = 1, n_solar_pars
+       init_sun (i) = var_sun (i)
+       if (if_var_sun (i)) then
+          nvar_sun = nvar_sun + 1
+          list_sun (nvar_sun) = i
+       end if
+    end do
+    
+    if (nvar_sun .gt. mmax) then
+       write (22, *) ' maximum number of solar parameters exceeded.'
+       go to 1000
+    end if
+    if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
+    
+    ! Read radiance fitting parameters:
+    !
+    ! radiance_line is a comment that may be echoed in the output.
+    !
+    ! If (iterate_rad) fit the radiances.
+    !
+    ! If (renorm) renormalize radiances to their weighted average before fitting.
+    ! Numerical overflow insurance. Good for BOAS, don't normally use with DOAS.
+    !
+    ! If (weight_rad) ) make the fit a weighted fit, as with weight_sun.
+    !
+    ! If (update_pars) use the parameters from fitting radiance n as the initial
+    ! guesses for fitting radiance n+1.
+    !
+    ! ll_rad and lu_rad select the active fitting region.
+    !
+    ! div_rad divides the radiance spectra by a (usually large) number to avoid
+    ! potential arithmetical overflow problems.
+    !
+    ! phase is a (non-fitted) parameter controlling the calculation of the
+    ! correction for spectral undersampling. See subroutine undersample and
+    ! Applied Optics 44, 1296-1304, 2005 for more detail.
+    !
+    ! nreport is the parameter number outputted to the fitting output file.
+    ! report_mult is a multiplier for its value and fitting uncertainty. report_mult
+    ! is required because the reference spectra are scaled (below) to avoid
+    ! potential numerical underflow issues. The fitted parameter values must be
+    ! scaled by the  same amount (if (.not. doas)). If (doas), report_mult should be
+    ! the negative of the scalar for the reported parameter.
+    !
+    ! Ground pixels (scenes) with solar zenith angle (sza) <= szamax, (sza) => szamin,
+    ! latitudes <= latmax, and latitudes >= latmin are analyzed.
+    !
+    ! Maximum cloud index clasification (cldmax). Only process pixels with
+    ! (cloud index) <= cldmax.
+    !
+    ! nfirstfit is the number of the radiance (counting consecutively along the
+    ! orbit, as given by ipix) to fit for wavelength in order to establish a
+    ! standard wavelength grid and sample the reference spectra.
+    !
+    read (21, '(a)') radiance_line
+    read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
+         div_rad, phase, nreport, report_mult, npars, nhw1erad, nshiftrad, &
+         nsqueezerad, nshaperad
+    read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
+    
+    ! Allocate radiance fitting parameter variables
+    ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), &
+         initial(1:npars), par_names(1:npars), var_factor(1:npars), par_str(1:npars))
+    
+    ! Read variables
+    DO i = 1, npars
+       read (21, *) j, var(i), if_varied(i), diff(i), par_names(i)
+    END DO
+    
+    ! Automatic difference-taking.
+    if (autodiff) then
+       do i = 1, npars
+          if (if_varied (i)) diff (i) = dabs (automult * var (i))
+       end do
+    end if
+    
+    ! Order the coefficients for mrqmin and save the initial values of the
+    ! coefficients.
+    nvaried = 0
+    do i = 1, npars
+       initial (i) = var (i)
+       if (if_varied (i)) then
+          nvaried = nvaried + 1
+          list_rad (nvaried) = i
+          if (i .eq. nreport) ngas = nvaried
+       end if
+    end do
+    if (nvaried .gt. mmax) then
+       write (22, *) ' maximum number of radiance parameters exceeded.'
+       go to 1000
+    end if
+    if (wrt_scr) write (*, *) 'nvaried  =', nvaried
+    if (wrt_scr) write (*, *) 'Max. sza =', szamax
+    if (wrt_scr) write (*, *) 'Min. sza =', szamin
+    if (wrt_scr) write (*, *) 'Max. lat =', latmax
+    if (wrt_scr) write (*, *) 'Min. lat =', latmin
+    if (wrt_scr) write (*, *) 'Max. cld =', cldmax
+    if (wrt_scr) write (*, *) 'nhw1e    =', nhw1erad
+    if (wrt_scr) write (*, *) 'nshift   =', nshiftrad
+    if (wrt_scr) write (*, *) 'nsqueeze =', nsqueezerad
+    if (wrt_scr) write (*, *) 'nshape   =', nshaperad
+    
+    ! Open irradiance and radiance level 1 file.
+    if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
+    read (*, '(a)') specin
+    write (*, '(a)') 'Opening file... '//specin
+    open (unit = 23, file = specin, status='old')
+    
+    ! Open spectrum output file.
+    if (write_spec) then
+       if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
+       read (*, '(a)') specout
+       open (unit = 24, file = specout, status='unknown')
+    end if
+    
+    ! Read the solar spectrum. A 2-column (position and irradiance value) spectrum
+    ! of npoints points, with no header, is expected.
+    ALLOCATE(pos_sun(1:npoints), spec_sun(1:npoints), sig_sun(1:npoints))
     do i = 1, npoints
-      asum = asum + pos (i) / (sig (i)**2)
-      ssum = ssum + 1. / (sig (i)**2)
+       read (23, *) pos_sun (i), spec_sun (i)
+       ! divide to avoid overflow issues.
+       spec_sun (i) = spec_sun (i) / div_sun
+       ! select fitting window by the use of weighting.
+       sig_sun (i) = 1.d30
+       if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun (i) = 1.d0
     end do
-    avg = asum / ssum
-  end if
-  iprovar = .false.
-  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, iteration, smooth, &
-    avg, spec, pos, sig, fit, var_sun, chisq, delchi, diffsun, correl, covar, &
-    rms, provar, iprovar, wrt_scr, 2, database, doas)
-  dshift = rms * sqrt (covar (10, 10) * float (npoints) / float (npoints - &
-    nvar_sun))
-  write (*, '(a, 1p2e14.6)') 'rad: shift, 1 sigma = ', - var_sun (11), dshift
-
-! Save parameters, to shift and squeeze radiance spectra. Remember SIGN of shift
-! determined this way, because it is minus the shift required to wavelength
-! correct the satellite radiance/irradiance spectra!
-  shift = var_sun (11)
-  squeeze = 1.d0 + var_sun (12)
-
-! Apply them to current positions, for undersampling and data-splining
-! calculations.
-  do i = 1, npoints
-    pos (i) = (pos (i) - shift) / squeeze
-  end do
-! else (later) calculate sun and radiance spectrum
-end if ! on iterate_sun
-write (*, *) 'finished with iterate_sun'
-
-! Calculate the undersampled spectrum.
-call undersample (pos, npoints, underspec, hw1e, phase, wrt_scr)
-
-! Calculate the splined fitting database. Note that the undersampled
-! spectrum has just been done. Finish filling in reference database array.
-call dataspline (pos, npoints, database, wrt_scr)
-
-! Spline irradiance spectrum onto radiance grid.
-call spline (pos_sun, spec_sun, npoints, deriv2sun)
-call splint (pos_sun, spec_sun, deriv2sun, npoints, npoints, pos, spline_sun)
-do i = 1, npoints
-  database (1, i) = spline_sun (i)
-  database (9, i) = underspec (1, i)
-  database (10, i) = underspec (2, i)
-! Set up Ring spectrum for high pass filtering of divided spectrum (afterward,
-! add solar spectrum back in order to divide by solar spectrum with altered
-! wavelength calibration in subroutine spectrum) - DOAS fitting only.
-  if (doas) then
-    database (2, i) = database (2, i) / spline_sun (i)
-  end if
-end do
-
-! For the DOAS case, high-pass filter the reference spectra.
-if (doas) then
-  call subtract_cubic (pos, npoints, database, ll_rad, lu_rad)
-  do i = 1, npoints
-    database (2, i) = database (2, i) * spline_sun (i)
-  end do
-end if
-
-! Load database using nfirst wavelength scale.
-call spectrum (npoints, npars, smooth, avg, pos, fit, var, wrt_scr, 3, &
-  database, doas)
-
-! Fit radiance spectra that meet the input file selection requirements.
-do i = 1, nrads
-  if (mod (i, 100) .eq. 0) write (*, *) ' nrad = ', i
-  do j = 1, npoints
-    pos (j) =  (pos_rad (i, j) - shift) / squeeze
-    spec (j) =  spec_rad (i, j)
-  end do
-
-! Renormalize, if requested (normally don't do for DOAS since we are dividing
-! by the solar spectrum just below, and logarithmizing).
-  if (renorm) then
-    remult = 0.d0
-    if (weight_rad) then
-      sigsum = 0.d0
-      do j = 1, npoints
-        remult = remult + spec (j) / (sig (j) * sig (j))
-        sigsum = sigsum + 1.d0 / (sig (j) * sig (j))
-      end do
-      remult = remult / sigsum
+    
+    ! Write out the input line and other input information.
+    IF (write_fit) WRITE (22, '(a)') inputline
+    IF (write_fit) CALL write_input()
+    
+    ! Proceed with solar fit for slit function and wavelength calibration
+    ! Perform solar wavelength calibration and slit width fitting:
+    ! Calculate avg here, for use in calculated spectra.
+    if (.not. weight_sun) then
+       avg = (pos_sun (npoints) + pos_sun (1)) / 2.
     else
-      do j = 1, npoints
-        remult = remult + spec (j)
-      end do
-      remult = remult / npoints
+       asum = 0.
+       ssum = 0.
+       do i = 1, npoints
+          asum = asum + pos_sun (i) / (sig_sun (i)**2)
+          ssum = ssum + 1. / (sig_sun (i)**2)
+       end do
+       avg = asum / ssum
     end if
-    do j = 1, npoints
-      spec (j) = spec (j) / remult
-    end do
-  end if
+    if (wrt_scr) write (*, *) ' avg = ', avg
+    
+    ! Calculate and iterate on the irradiance spectrum. The flag for convergence
+    ! from lack of change in the variables, iprovar, is set to .false. before
+    ! iteration begins.
+    iprovar = .false.
+    if (iterate_sun) then
+       ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
+            alpha(1:n_solar_pars,1:n_solar_pars),fit(1:npoints))
+       call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
+            avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
+            fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
+            var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
+            iprovar, 1, database)
+       DEALLOCATE(correl, covar, fit)
+       print*, iprovar
+       stop
+       ! Shift and squeeze solar spectrum.
+       do i = 1, npoints
+          pos_sun (i) = (pos_sun (i) - var_sun (11)) / (1.d0 + var_sun (12))
+       end do
+       dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
+            float (npoints - nvar_sun))
+       write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
+       write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (11), dshift
+       write (*, *) 'nvar_sun = ', nvar_sun
+       
+       ! Freeze variation of slit width for radiance fitting is not currently
+       ! implemented.
+       ! if_var_sun (10) = .false.
+       
+       ! Set width for later use in undersampling correction. hw1e means the gaussian
+       ! half-width at 1/e of the maximum intensity.
+       hw1e = var_sun (10)
+       dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
+            float (npoints - nvar_sun))
+       write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
+       
+       DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
+            var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
+            sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
+            sun_par_str, var_sun_factor)
+       stop
 
-! High pass filtering for DOAS. First, take log (rad/irrad), then filter by
-! subtracting a cubic, then re-add the log (irradiance). This way we are fitting
-! the log (rad) with the proper filtering having been done. The spectrum
-! subroutine will start by subtracting the irradiance spectrum, where the proper
-! shifting and squeezing can take place. In this high-pass filtering, we ignore
-! the small extra wavelength calibration change, as for Ring effect, above.
-  if (doas) then
-    do j = 1, npoints
-      spec (j) = dlog (spec (j) / spline_sun (j))
-    end do
-    call subtract_cubic_meas (pos, npoints, spec, ll_rad, lu_rad)
-    do j = 1, npoints
-      spec (j) = spec (j) + dlog (spline_sun (j))
-    end do
-  end if
+       ! Initialize several diagnostics.
+       ! rmsavg: average fitting rms.
+       ! davg: average fitting uncertainty for reported parameter.
+       ! drelavg: average relative fitting uncertainty for reported parameter.
+       ! dshiftavg:  average fitting uncertainty for spectral shift parameter.
+       ! nfirst is the number among fitted radiances corresponding to the ground pixel
+       ! nfirstfit.
+!!$       rmsavg = 0.d0
+!!$       davg = 0.d0
+!!$       drelavg = 0.d0
+!!$       dshiftavg = 0.d0
+!!$       nfirst = 0
+!!$       
+!!$       
+!!$       ! Read the measured spectra.
+!!$       !
+!!$       ! ipix: The number of the radiance, counting consecutively along the orbit.
+!!$       !
+!!$       ! iyear (Year data was collected), imonth (Month data was collected), iday 
+!!$       ! (Day data was collected), ihour (Hour data wav collected), imin 
+!!$       ! (Minuted data was collected) and isec (Second data was collected)
+!!$       !
+!!$       ! ilat (Latitude data was collected), ilon
+!!$       ! 1 is normally selected when we extract data from a GOME el1 file. Because of
+!!$       ! longer integration times when the light conditions are low, sometimes our
+!!$       ! selected band has not been read out, and we need to skip over these ground
+!!$       ! pixels.
+!!$       !
+!!$       ! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
+!!$       !
+!!$       ! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
+!!$       ! east/west edges and center of ground pixel.
+!!$       !
+!!$       ! zs, re: Satellite height and earth radius for each ground pixel measurement.
+!!$       !
+!!$       ! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
+!!$       ! longitudes for 4 corners and center of ground pixel.
+!!$       !
+!!$       i = 1
+!!$40     READ (23, *, end = 50) ipix, icld
+!!$       READ (23, *) iyear, imonth, iday, ihour, imin, isec
+!!$       READ (23, *) ilat, ilon
+!!$       READ (23, *) isza, isaa, ivza, ivaa
+!!$       
+!!$       ! Decide whether to process. If so, update the appropriate arrays and the
+!!$       ! counter for radiances being fitted.
+!!$       IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
+!!$            (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
+!!$          npix(i) = ipix
+!!$          cld(i) = icld
+!!$          year(i) = iyear
+!!$          month(i) = imonth
+!!$          day(i) = iday
+!!$          hour(i) = ihour
+!!$          minu(i) = imin
+!!$          sec(i) = isec
+!!$          sza(i) = isza
+!!$          saa(i) = isaa
+!!$          vza(i) = ivza
+!!$          vaa(i) = ivaa
+!!$          lat(i) = ilat
+!!$          lon(i) = ilon
+!!$          !   Read radiance spectrum (positions and radiances) for each ground pixel.
+!!$          do j = 1, npoints
+!!$             read (23, *) pos_rad (i, j), spec_rad (i, j)
+!!$             spec_rad (i, j) = spec_rad (i, j) / div_rad ! usually 1.d13 or 1.d14
+!!$          end do
+!!$          !   Is this the pixel selected for full wavelength calibration?
+!!$          if (ipix .eq. nfirstfit) nfirst = i
+!!$          i = i + 1
+!!$          !   Ignore spectra not selected for processing.
+!!$       else 
+!!$          do j = 1, npoints
+!!$             read (23, *)
+!!$          end do
+!!$       end if
+!!$       go to 40
+!!$50     nrads = i - 1
+!!$       if (nrads .eq. 0) then
+!!$          write (*, *) 'nrads = 0'
+!!$          stop
+!!$       end if
+!!$       
+!!$       ! if there is no spectrum corresponding to nfirstfit, select nfirst halfway
+!!$       ! along the orbit.
+!!$       if (nfirst .eq. 0) nfirst = CEILING(FLOAT(nrads)/2.0)
+!!$       
+!!$       ! Add the weighting, in the single array.
+!!$       do i = 1, npoints
+!!$          sig(i) = 1.d6
+!!$          if (i .ge. ll_rad .and. i .le. lu_rad) sig(i) = 1.d0
+!!$       end do
+!!$       
+!!$       ! Order the coefficients for mrqmin and save the initial values of the
+!!$       ! coefficients (uncomment if slit variation freeze is to be implemented).
+!!$       ! nvar_sun = 0
+!!$       ! do i = 1, n_solar_pars
+!!$       !   init_sun (i) = var_sun (i)
+!!$       !   if (if_var_sun (i)) then
+!!$       !     nvar_sun = nvar_sun + 1
+!!$       !     list_sun (nvar_sun) = i
+!!$       !   end if
+!!$       ! end do
+!!$       
+!!$       ! Select and wavelength calibrate selected radiance spectrum.
+!!$       write (*, *) ' nfirst = ', nfirst
+!!$       do i = 1, npoints
+!!$          pos (i) = pos_rad (nfirst, i)
+!!$          spec (i) = spec_rad (nfirst, i)
+!!$       end do
+!!$       if (.not. weight_sun) then
+!!$          avg = (pos (npoints) + pos (1)) / 2.
+!!$       else
+!!$          asum = 0.
+!!$          ssum = 0.
+!!$          do i = 1, npoints
+!!$             asum = asum + pos (i) / (sig (i)**2)
+!!$             ssum = ssum + 1. / (sig (i)**2)
+!!$          end do
+!!$          avg = asum / ssum
+!!$       end if
+!!$       iprovar = .false.
+!!$  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, iteration, smooth, &
+!!$    avg, spec, pos, sig, fit, var_sun, chisq, delchi, diffsun, correl, covar, &
+!!$    rms, provar, iprovar, wrt_scr, 2, database, doas)
+!!$  dshift = rms * sqrt (covar (10, 10) * float (npoints) / float (npoints - &
+!!$    nvar_sun))
+!!$       write (*, '(a, 1p2e14.6)') 'rad: shift, 1 sigma = ', - var_sun (11), dshift
+!!$       
+!!$       ! Save parameters, to shift and squeeze radiance spectra. Remember SIGN of shift
+!!$       ! determined this way, because it is minus the shift required to wavelength
+!!$       ! correct the satellite radiance/irradiance spectra!
+!!$       shift = var_sun (11)
+!!$       squeeze = 1.d0 + var_sun (12)
+!!$       
+!!$       ! Apply them to current positions, for undersampling and data-splining
+!!$       ! calculations.
+!!$       do i = 1, npoints
+!!$          pos (i) = (pos (i) - shift) / squeeze
+!!$       end do
+!!$       ! else (later) calculate sun and radiance spectrum
+    end if ! on iterate_sun
+!!$    write (*, *) 'finished with iterate_sun'
+!!$    
+!!$    ! Calculate the undersampled spectrum.
+!!$    call undersample (pos, npoints, underspec, hw1e, phase, wrt_scr)
+!!$    
+!!$    ! Calculate the splined fitting database. Note that the undersampled
+!!$    ! spectrum has just been done. Finish filling in reference database array.
+!!$    call dataspline (pos, npoints, database, wrt_scr)
+!!$    
+!!$    ! Spline irradiance spectrum onto radiance grid.
+!!$    call spline (pos_sun, spec_sun, npoints, deriv2sun)
+!!$    call splint (pos_sun, spec_sun, deriv2sun, npoints, npoints, pos, spline_sun)
+!!$    do i = 1, npoints
+!!$       database (1, i) = spline_sun (i)
+!!$       database (9, i) = underspec (1, i)
+!!$       database (10, i) = underspec (2, i)
+!!$       ! Set up Ring spectrum for high pass filtering of divided spectrum (afterward,
+!!$       ! add solar spectrum back in order to divide by solar spectrum with altered
+!!$       ! wavelength calibration in subroutine spectrum) - DOAS fitting only.
+!!$       if (doas) then
+!!$          database (2, i) = database (2, i) / spline_sun (i)
+!!$       end if
+!!$    end do
+!!$    
+!!$    ! For the DOAS case, high-pass filter the reference spectra.
+!!$    if (doas) then
+!!$       call subtract_cubic (pos, npoints, database, ll_rad, lu_rad)
+!!$       do i = 1, npoints
+!!$          database (2, i) = database (2, i) * spline_sun (i)
+!!$       end do
+!!$    end if
+!!$    
+!!$    ! Load database using nfirst wavelength scale.
+!!$    call spectrum (npoints, npars, avg, pos, fit, var, var_factor, par_str, 3, database)
+!!$    
+!!$    ! Fit radiance spectra that meet the input file selection requirements.
+!!$    do i = 1, nrads
+!!$       if (mod (i, 100) .eq. 0) write (*, *) ' nrad = ', i
+!!$       do j = 1, npoints
+!!$          pos (j) =  (pos_rad (i, j) - shift) / squeeze
+!!$          spec (j) =  spec_rad (i, j)
+!!$       end do
+!!$       
+!!$       ! Renormalize, if requested (normally don't do for DOAS since we are dividing
+!!$       ! by the solar spectrum just below, and logarithmizing).
+!!$       if (renorm) then
+!!$          remult = 0.d0
+!!$          if (weight_rad) then
+!!$             sigsum = 0.d0
+!!$             do j = 1, npoints
+!!$                remult = remult + spec (j) / (sig (j) * sig (j))
+!!$                sigsum = sigsum + 1.d0 / (sig (j) * sig (j))
+!!$             end do
+!!$             remult = remult / sigsum
+!!$          else
+!!$             do j = 1, npoints
+!!$                remult = remult + spec (j)
+!!$             end do
+!!$             remult = remult / npoints
+!!$          end if
+!!$          do j = 1, npoints
+!!$             spec (j) = spec (j) / remult
+!!$          end do
+!!$       end if
+!!$       
+!!$       ! High pass filtering for DOAS. First, take log (rad/irrad), then filter by
+!!$       ! subtracting a cubic, then re-add the log (irradiance). This way we are fitting
+!!$       ! the log (rad) with the proper filtering having been done. The spectrum
+!!$       ! subroutine will start by subtracting the irradiance spectrum, where the proper
+!!$       ! shifting and squeezing can take place. In this high-pass filtering, we ignore
+!!$       ! the small extra wavelength calibration change, as for Ring effect, above.
+!!$       if (doas) then
+!!$          do j = 1, npoints
+!!$             spec (j) = dlog (spec (j) / spline_sun (j))
+!!$          end do
+!!$          call subtract_cubic_meas (pos, npoints, spec, ll_rad, lu_rad)
+!!$          do j = 1, npoints
+!!$             spec (j) = spec (j) + dlog (spline_sun (j))
+!!$          end do
+!!$       end if
+!!$       
+!!$       ! Apply smoothing (1/16,1/4,3/8,1/4,1/16); 2/98 UHE/IFE recommendation: This is
+!!$       ! done by several colleagues as an alternative to undersampling correction. It
+!!$       ! is included here in case it is needed for comparison, but is not normally
+!!$       ! needed or used (or desired).
+!!$       if (smooth) then
+!!$          do j = 1, npoints
+!!$             temp (j) = spec (j)
+!!$          end do
+!!$          do j = 3, npoints - 2
+!!$             spec (j) = 0.375d0 * temp (j) + 0.25d0 * (temp (j + 1) + temp (j - 1)) + &
+!!$                  0.0625d0 * (temp (j + 2) + temp (j - 2))
+!!$          end do
+!!$       end if
+!!$       if (.not. weight_rad) then
+!!$          avg = (pos (npoints) + pos (1)) / 2.
+!!$       else
+!!$          asum = 0.
+!!$          ssum = 0.
+!!$          do j = 1, npoints
+!!$             asum = asum + pos (j) / (sig (j)**2)
+!!$             ssum = ssum + 1. / (sig (j)**2)
+!!$          end do
+!!$          avg = asum / ssum
+!!$       end if
+!!$       iprovar = .false.
+!!$       if (iterate_rad) then
+!!$          if (.not. update_pars) then
+!!$             if (wrt_scr) write (*, *) ' updating parameters'
+!!$             do j = 1, npars
+!!$                var (j) = initial (j)
+!!$             end do
+!!$          end if
+!!$          
+!!$          !   BOAS or DOAS fitting now done here.
+!!$    call specfit (npoints, npars, nvaried, list_rad, iteration, smooth, avg, &
+!!$      spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, &
+!!$      provar, iprovar, wrt_scr, 4, database, doas)
 
-! Apply smoothing (1/16,1/4,3/8,1/4,1/16); 2/98 UHE/IFE recommendation: This is
-! done by several colleagues as an alternative to undersampling correction. It
-! is included here in case it is needed for comparison, but is not normally
-! needed or used (or desired).
-  if (smooth) then
-    do j = 1, npoints
-      temp (j) = spec (j)
-    end do
-    do j = 3, npoints - 2
-      spec (j) = 0.375d0 * temp (j) + 0.25d0 * (temp (j + 1) + temp (j - 1)) + &
-        0.0625d0 * (temp (j + 2) + temp (j - 2))
-    end do
-  end if
-  if (.not. weight_rad) then
-    avg = (pos (npoints) + pos (1)) / 2.
-  else
-    asum = 0.
-    ssum = 0.
-    do j = 1, npoints
-      asum = asum + pos (j) / (sig (j)**2)
-      ssum = ssum + 1. / (sig (j)**2)
-    end do
-    avg = asum / ssum
-  end if
-  iprovar = .false.
-  if (iterate_rad) then
-    if (.not. update_pars) then
-      if (wrt_scr) write (*, *) ' updating parameters'
-      do j = 1, npars
-        var (j) = initial (j)
-      end do
-    end if
-
-!   BOAS or DOAS fitting now done here.
-    call specfit (npoints, npars, nvaried, list_rad, iteration, smooth, avg, &
-      spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, &
-      provar, iprovar, wrt_scr, 4, database, doas)
-
-!   write out radiance fit: keep here as possible future diagnostic.
-!   do j = ll_rad, lu_rad
-!     write (24, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
-!     spec (j) - fit (j)
-!   end do
-
-!   Write out fitting results.
-    gas = report_mult * var (nreport)
-    dgas = report_mult * rms * sqrt (covar (ngas, ngas) * float (npoints) / &
-      float (npoints - nvaried))
-    write (22, '(i5, 1p3e12.4)') npix(i), gas, dgas, rms
-    write (22, '(4f7.2)') sza(i), saa(i), vza(i), vaa(i)
-    write (22, '(10f7.2)') lat(i), lon(i)
-    dshiftrad = rms * sqrt (covar (nshiftrad, nshiftrad) * float (npoints) / &
-      float (npoints - nvaried))
-    dshiftavg = dshiftavg + dshiftrad
-    rmsavg = rmsavg + rms
-    davg = davg + dgas
-    drelavg = drelavg + dabs (dgas / gas)
-
-! Write out extra diagnostics.
-if (write_fit) &
-  call write_output (nvaried, list_rad, iteration, write_fit, write_spec, &
-  iterate_rad, pos, spec, fit, var, initial, covar, chisq, delchi, correl, &
-  rms, npoints, weight_rad, provar, iprovar)
-
-! else (TBD later) calculate sun and radiance spectrum, no iteration.
-  end if ! on iterate_rad
-  if (if_residuals) then
-    do j = 1, npoints
-      residual (j) = residual (j) + spec (j) - fit (j)
-    end do
-  end if
-end do ! on nrads.
-
-! Write out the average fitting statistics to screen.
-write (*, '(a33, 1pe13.5)') '                       Avg rms = ', rmsavg / nrads
-write (*, '(a33, 1pe13.5)') '                     Avg dgas = ', davg / nrads
-write (*, '(a33, 1pe13.5)') ' Avg relative gas uncertainty = ', drelavg / nrads
-write (*, '(a33, 1pe13.5)') ' Avg radiance shift uncertainty = ', dshiftavg / &
-  nrads
-
-! Write out the fitting statistics and average residuals.
-if (if_residuals) then
-  write (22, '(a28, 1pe13.5)') '                  Avg rms = ', rmsavg / nrads
-  write (22, '(a28, 1pe13.5)') '                Avg dgas = ', davg / nrads
-  write (22, '(a28, 1pe13.5)') ' Avg rel gas uncertainty = ', drelavg / nrads
-  do i = 1, npoints
-    write (22, '(f10.5, 1pe13.5)') pos (i), residual (i) / nrads
-  end do
-end if
-
-! If (mirror), mirror the input file, with updated parameters, onto the output
-! fitting file.
-if (mirror) then
-  write (22, *)
-  write (22, '(a)') inputline
-  write (22, '(a)') general_line
-  write (22, '(i5, 1p2e12.4, 0pf8.4)') npoints, delchi, provar, automult
-  write (22, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, &
-    doas, if_residuals
-  write (22, '(a)') solar_line
-  write (22, '(2l2, 3i4, 1pe9.2)') iterate_sun, weight_sun, n_solar_pars, &
-    ll_sun, lu_sun, div_sun
-  do i = 1, n_solar_pars
-    write (22, '(1pe15.7, l4, 1pe14.5)') var_sun (i), if_var_sun (i), &
-    diffsun (i)
-  end do
-  write (22, '(a)') radiance_line
-  write (22, '(4l2, 2i4, 1pe9.2, 0pf5.2)') iterate_rad, renorm, weight_rad, &
-    update_pars, ll_rad, lu_rad, div_rad, phase
-  write (22, '(4f7.2, i6)') szamax, szamin, latmax, latmin, nfirstfit
-  do i = 1, npars
-    write (22, '(1pe15.7, l4, 1pe14.5)') var (i), if_varied (i), diff (i)
-  end do
-end if
-
+          !   write out radiance fit: keep here as possible future diagnostic.
+          !   do j = ll_rad, lu_rad
+          !     write (24, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
+          !     spec (j) - fit (j)
+          !   end do
+          
+          !   Write out fitting results.
+!!$          gas = report_mult * var (nreport)
+!!$          dgas = report_mult * rms * sqrt (covar (ngas, ngas) * float (npoints) / &
+!!$               float (npoints - nvaried))
+!!$          write (22, '(i5, 1p3e12.4)') npix(i), gas, dgas, rms
+!!$          write (22, '(4f7.2)') sza(i), saa(i), vza(i), vaa(i)
+!!$          write (22, '(10f7.2)') lat(i), lon(i)
+!!$          dshiftrad = rms * sqrt (covar (nshiftrad, nshiftrad) * float (npoints) / &
+!!$               float (npoints - nvaried))
+!!$          dshiftavg = dshiftavg + dshiftrad
+!!$          rmsavg = rmsavg + rms
+!!$          davg = davg + dgas
+!!$          drelavg = drelavg + dabs (dgas / gas)
+!!$          
+!!$          ! Write out extra diagnostics.
+!!$          if (write_fit) &
+!!$               call write_output (nvaried, list_rad, iteration, write_fit, write_spec, &
+!!$               iterate_rad, pos, spec, fit, var, initial, covar, chisq, delchi, correl, &
+!!$               rms, npoints, weight_rad, provar, iprovar)
+!!$          
+!!$          ! else (TBD later) calculate sun and radiance spectrum, no iteration.
+!!$       end if ! on iterate_rad
+!!$       if (if_residuals) then
+!!$          do j = 1, npoints
+!!$             residual (j) = residual (j) + spec (j) - fit (j)
+!!$          end do
+!!$       end if
+!!$    end do ! on nrads.
+!!$    
+!!$    ! Write out the average fitting statistics to screen.
+!!$    write (*, '(a33, 1pe13.5)') '                       Avg rms = ', rmsavg / nrads
+!!$    write (*, '(a33, 1pe13.5)') '                     Avg dgas = ', davg / nrads
+!!$    write (*, '(a33, 1pe13.5)') ' Avg relative gas uncertainty = ', drelavg / nrads
+!!$    write (*, '(a33, 1pe13.5)') ' Avg radiance shift uncertainty = ', dshiftavg / &
+!!$         nrads
+!!$    
+!!$    ! Write out the fitting statistics and average residuals.
+!!$    if (if_residuals) then
+!!$       write (22, '(a28, 1pe13.5)') '                  Avg rms = ', rmsavg / nrads
+!!$       write (22, '(a28, 1pe13.5)') '                Avg dgas = ', davg / nrads
+!!$       write (22, '(a28, 1pe13.5)') ' Avg rel gas uncertainty = ', drelavg / nrads
+!!$       do i = 1, npoints
+!!$          write (22, '(f10.5, 1pe13.5)') pos (i), residual (i) / nrads
+!!$       end do
+!!$    end if
+!!$    
+!!$    ! If (mirror), mirror the input file, with updated parameters, onto the output
+!!$    ! fitting file.
+!!$    if (mirror) then
+!!$       write (22, *)
+!!$       write (22, '(a)') inputline
+!!$       write (22, '(a)') general_line
+!!$       write (22, '(i5, 1p2e12.4, 0pf8.4)') npoints, delchi, provar, automult
+!!$       write (22, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, &
+!!$            doas, if_residuals
+!!$       write (22, '(a)') solar_line
+!!$       write (22, '(2l2, 3i4, 1pe9.2)') iterate_sun, weight_sun, n_solar_pars, &
+!!$            ll_sun, lu_sun, div_sun
+!!$       do i = 1, n_solar_pars
+!!$          write (22, '(1pe15.7, l4, 1pe14.5)') var_sun (i), if_var_sun (i), &
+!!$               diffsun (i)
+!!$       end do
+!!$       write (22, '(a)') radiance_line
+!!$       write (22, '(4l2, 2i4, 1pe9.2, 0pf5.2)') iterate_rad, renorm, weight_rad, &
+!!$            update_pars, ll_rad, lu_rad, div_rad, phase
+!!$       write (22, '(4f7.2, i6)') szamax, szamin, latmax, latmin, nfirstfit
+!!$       do i = 1, npars
+!!$          write (22, '(1pe15.7, l4, 1pe14.5)') var (i), if_varied (i), diff (i)
+!!$       end do
+!!$    end if
+    
 1000 close (unit = 21)
-close (unit = 22)
-close (unit = 23)
-close (unit = 24)
+    close (unit = 22)
+    close (unit = 23)
+    close (unit = 24)
+    
+  END SUBROUTINE GASFIT
 
-END SUBROUTINE GASFIT
-!
-subroutine specfit (npoints, npars, nvaried, lista, iteration, smooth, avg, &
-  spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, provar, &
-  iprovar, wrt_scr, ntype, database, doas)
+  SUBROUTINE specfit (np, npars, nvaried, lista, avg, &
+       spec, pos, sig, fit_spec, &
+       var, diff, fac, str, iprovar, ntype, database)
+    ! Driver for Levenberg-Marquardt nonlinear least squares minimization.
+    
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: np, npars, nvaried, ntype
+    REAL*8, INTENT(IN) :: avg
+    REAL*8, INTENT(IN), DIMENSION(1:np) :: spec, pos, sig
+    REAL*8, INTENT(IN), DIMENSION(1:npars) :: diff, fac
+    CHARACTER(3), INTENT(IN), DIMENSION(1:npars) :: str
+    
+    ! Output variables
+    REAL*8, INTENT(OUT), DIMENSION(1:np) :: fit_spec
+    
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:npars) :: var
+    LOGICAL, INTENT(INOUT) :: iprovar
+    INTEGER*4, INTENT(INOUT), DIMENSION(1:npars) :: lista
 
-! Driver for Levenberg-Marquardt nonlinear least squares minimization.
-
-implicit real*8 (a - h, o - z)
-external funcs
-parameter (mmax = 64)
-parameter (maxpts = 7000)
-logical iprovar, wrt_scr, smooth, doas
-dimension spec (maxpts), pos (maxpts), sig (maxpts), fit (maxpts)
-dimension lista (mmax)
-dimension covar (mmax, mmax), alpha (mmax, mmax), correl (mmax, mmax)
-dimension var (mmax), diff (mmax)
-dimension var0 (mmax)
-dimension database (11, maxpts)
-save
-
-alamda = - 1
-call mrqmin (pos, spec, sig, npoints, var, npars, lista, nvaried, covar, &
-  alpha, chisq, funcs, alamda, delchi, smooth, avg, diff, wrt_scr, ntype, &
-  database, doas)
-
-iteration = 1
-itest = 0
-1 if (wrt_scr) then
-  write (22,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
-    iteration, 'chi-squared: ', chisq, 'alamda:', alamda
-  write (22,'(1x, a)') 'variables:'
-  write (22,'(1x, 1p6e13.4)') (var (lista (i)), i = 1, nvaried)
-  write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
-    iteration, 'chi-squared: ', chisq, 'alamda:', alamda
-  write (*,'(1x, a)') 'variables:'
-  write (*,'(1x, 1p6e12.4)') (var (lista (i)), i = 1, nvaried)
-end if
-iteration = iteration + 1
-ochisq = chisq
-do i = 1, nvaried
-  var0 (lista (i)) = var (lista (i))
-end do
-call mrqmin (pos, spec, sig, npoints, var, npars, lista, nvaried, covar, &
-  alpha, chisq, funcs, alamda, delchi, smooth, avg, diff, wrt_scr, ntype, &
-  database, doas)
-do i = 1, nvaried
-  prop = abs (var0 (lista (i)) - var (lista (i)))
-  difftest = provar * diff (lista (i))
-  if (prop .gt. difftest) then
-    go to 2
-  end if
-end do
-iprovar = .true.
-if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
-go to 3
-2 if (chisq .gt. ochisq) then
-  itest = 0
-else if (abs (ochisq - chisq) .lt. delchi) then
-  itest = itest + 1
-end if
-if (itest .lt. 2) then
-  go to 1
-end if
-3 alamda = 0.0
-call mrqmin (pos, spec, sig, npoints, var, npars, lista, nvaried, covar, &
-  alpha, chisq, funcs, alamda, delchi, smooth, avg, diff, wrt_scr, ntype, &
-  database, doas)
-if (wrt_scr) then
-  write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-    iteration, 'chi-squared:', chisq, 'alamda:', alamda
-  write (*,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-    iteration, 'chi-squared:', chisq, 'alamda:', alamda
-end if
-
-! Calculate the correlation matrix.
-do i = 1, nvaried
-  correl (i, i) = 1.
-  do j = 1, i
-    if (i .ne. j) correl (i, j) = covar (i, j) / sqrt (covar (i, i) * &
-    covar (j, j))
-  end do
-end do
-
-! Calculate the final spectrum.
-call spectrum (npoints, npars, smooth, avg, pos, fit, var, wrt_scr, ntype, &
-  database, doas)
-
-! Calculate the rms of the fit.
-rsum = 0.
-do i = 1, npoints
-  rsum = rsum + ((fit (i) - spec (i)) / sig (i))**2
-end do
-rms = sqrt (rsum / npoints)
-
-return
-end subroutine specfit
-!
-subroutine spectrum (npoints, npars, smooth, avg, pos, fit, var, wrt_scr, &
-  ntype, database, doas)
-
-! Spectrum calculation for both fitting and non-fitting cases. For fitting, it
-! is called with 4 different qualifiers ("ntypes") for purposes of determining
-! the calculation type and initializing the fitting reference database.
-! ntype = 1: Solar wavelength calibration. Open kpnospec, the high spectral
-! resolution irradiance reference spectrum.
-! ntype = 2: Radiance wavelength calibration (kpnospec already open).
-! ntype = 3: First radiance fit (fill refspec from database).
-! ntype = 4: Later radiance fits (refspec already filled).
-
-implicit real*8 (a - h, o - z)
-parameter (mmax = 64)
-parameter (maxpts = 7000)
-parameter (maxkpno = 7000)
-dimension pos (maxpts), fit (maxpts)
-dimension sunpos (maxpts), refspec (maxpts, 10)
-dimension database (11, maxpts)
-dimension sunpos_ss (maxpts), sunspec (maxpts)
-dimension sunspec_ss (maxpts)
-dimension suntemp (maxpts), reftemp (maxpts, 10)
-dimension d2sun (maxpts)
-dimension var (mmax)
-real*8 kppos (maxkpno), kppos_ss (maxkpno), kpspec (maxkpno), kpspec_gauss (maxkpno)
-character*120 kpnospec
-logical wrt_scr, smooth, doas
-logical first_sun /.true./
-save
-
-if (ntype .eq. 1) then
-  if (first_sun) then
-    first_sun = .false.
-    if (wrt_scr) write (*, '(5x,a)') 'wavelength reference spectrum.'
-    read (*, '(a)') kpnospec
-    open (unit = 25, file = kpnospec, status='old')
-    i = 1
-10  read (25, *, end = 20) kppos (i), kpspec (i)
-      kpspec (i) = kpspec (i) !/ 1.d14
-      i = i + 1
-      go to 10
-20  close (unit = 25)
-    nsun = i - 1
-  end if ! on first_sun
-else if (ntype .eq. 3) then
-! The following kluge keeps me from extra re-writing.
-  nsun = npoints
-  do i = 1, nsun
-    sunpos (i) = pos (i)
-    sunspec (i) = database (1, i)
-    do j = 1, 10
-      refspec (i, j) = database (j + 1, i)
-    end do
-  end do
-! jmax used below for reference spectra calculations. It is the number of
-! reference spectra.
-  jmax = (npars - 12) / 4
-  if (smooth) then
-    do i = 1, nsun
-      suntemp (i) = sunspec (i)
-      do j = 1, 10
-        reftemp (i, j) = refspec (i, j)
-      end do
-    end do
-    do i = 3, npoints - 2
-      sunspec (i) = 0.375d0 * suntemp (i) + 0.25d0 * (suntemp (i + 1) + &
-        suntemp (i - 1)) + 0.0625d0 * (suntemp (i + 2) + suntemp (i - 2))
-      do j = 1, 10
-        refspec (i, j) = 0.375d0 * reftemp (i, j) + 0.25d0 * &
-        (reftemp (i + 1, j) + reftemp (i - 1, j)) + 0.0625d0 * &
-        (reftemp (i + 2, j) + reftemp (i - 2, j))
-      end do
-    end do
-  end if ! on smoothing.
-  return ! ntype = 3, database loaded.
-end if ! on ntype.
-
-! Calculate the spectrum: First do the shift and squeeze. Shift by var (11),
-! squeeze by 1 + var (12); do in absolute sense, to make it easy to back-convert
-! radiance data.
-do i = 1, nsun
-  if (ntype .eq. 1 .or. ntype .eq. 2) then
-    kppos_ss (i) = kppos (i) * (1.d0 + var (12)) + var (11)
-  else
-    sunpos_ss (i) = sunpos (i) * (1.d0 + var (12)) + var (11)
-  end if
-end do
-
-! Broadening and re-sampling of solar spectrum.
-if (ntype .eq. 1 .or. ntype .eq. 2) then
-! Case for wavelength fitting of irradiance and radiance.
-! Broaden the solar reference by the hw1e value.
-  hw1e = var (10)
-  call gauss (kppos_ss, kpspec, kpspec_gauss, nsun, hw1e)
-! Re-sample the solar reference spectrum to the radiance grid.
-  call spline (kppos_ss, kpspec_gauss, nsun, d2sun)
-  call splint (kppos_ss, kpspec_gauss, d2sun, nsun, npoints, pos, sunspec_ss)
-else
-! Re-sample the solar reference spectrum to the radiance grid.
-  call spline (sunpos_ss, sunspec, nsun, d2sun)
-  call splint (sunpos_ss, sunspec, d2sun, nsun, npoints, pos, sunspec_ss)
-end if
-
-! Add up the contributions, with solar intensity as var (9), trace species
-! beginning at var (13), to include possible linear and Beer's law forms. Do
-! these as linear-Beer's-linear. In order to do DOAS I need to be careful to
-! include just linear contributions, which I already high-pass filtered.
-
-! DOAS here - the spectrum to be fitted needs to be re-defined.
-if (doas .and. ntype .eq. 4) then
-  do i = 1, npoints
-!   For DOAS, var (9) should == 1., and not be varied.
-    fit (i) = var (9) * dlog (sunspec_ss (i))
-!   Ring adjustment.
-    fit (i) = fit (i) + var (13) * (refspec (i, 1) / sunspec_ss (i))
-    do j = 2, jmax
-      fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
-    end do
-  end do
-else
-! Doing BOAS.
-  do i = 1, npoints
-    fit (i) = var (9) * sunspec_ss (i)
-!   Initial add-on contributions.
-    do j = 1, jmax
-      fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
-    end do
-!   Beer's law contributions.
-    do j = 1, jmax
-      fit (i) = fit (i) * dexp (- var (4 * j + 10) * refspec (i, j))
-    end do
-!   Final add-on contributions.
-    do j = 1, jmax
-      fit (i) = fit (i) + var (4 * j + 11) * refspec (i, j)
-    end do
-  end do
-end if
-
-! Add the scaling.
-do i = 1, npoints
-  del = pos (i) - avg
-  fit (i) = fit (i) * (var (5) + del * var (6) + (del**2) * var (7) + &
-  (del**3) * var (8))
-end do
-
-! Add baseline parameters.
-do i = 1, npoints
-  del = pos (i) - avg
-  fit (i) = fit (i) + var (1) + del * var (2) + (del**2) * var (3) + &
-  (del**3) * var (4)
-end do
-
-return
-end subroutine spectrum
-!
-subroutine mrqmin (x, y, sig, ndata, a, ma, lista, mfit, covar, alpha, chisq, &
-  funcs, alamda, delchi, smooth, avg, diff, wrt_scr, ntype, database, doas)
-
-! Levenberg-Marquardt minimization adapted from Numerical Recipes.
-
-implicit real*8 (a - h, o - z)
-external funcs
-parameter (mmax = 64)
-parameter (maxpts = 2000)
-dimension x (maxpts), y (maxpts), sig (maxpts), a (mmax), lista (mmax), &
-  covar (mmax, mmax), alpha (mmax, mmax), atry (mmax), beta (mmax), da (mmax), &
-  diff (mmax), index (mmax), database (11, maxpts)
-logical wrt_scr, smooth, doas, first_call /.true./
-real*8 identity (mmax, mmax), inverse (mmax, mmax)
-save
-
-if (first_call) then
-  first_call = .false.
-  identity = 0.d0
-  do j = 1, mmax
-    identity (j, j) = 1.d0
-  end do
-end if
-if (alamda .lt. 0.) then
-  kk = mfit + 1
-  do j = 1, ma
-    ihit = 0
-    do k = 1, mfit
-      if (lista (k) .eq. j) ihit = ihit + 1
-    end do
-    if (ihit .eq. 0) then
-      lista (kk) = j
-      kk = kk + 1
-    else if (ihit .gt. 1) then
-      print*, 'improper permutation in lista'
+    ! Local variables
+    REAL*8 :: alamda, ochisq
+    REAL*8, DIMENSION(1:npars,1:npars) :: alpha
+    REAL*8, DIMENSION(1:npars) :: var0
+    REAL*8, DIMENSION(11,np) :: database
+    INTEGER*4 :: itest, i
+    
+    external funcs
+    save
+    
+    alamda = - 1
+    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
+         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
+         funcs, alamda, avg, diff(1:npars), ntype, database)
+    iteration = 1
+    itest = 0
+    if (wrt_scr) then
+       write (22,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
+            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
+       write (22,'(1x, a)') 'variables:'
+       write (22,'(1x, 1p6e13.4)') (var (lista (i)), i = 1, nvaried)
+       write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
+            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
+       write (*,'(1x, a)') 'variables:'
+       write (*,'(1x, 1p6e12.4)') (var (lista (i)), i = 1, nvaried)
     end if
-  end do
-  if (kk .ne. (ma + 1)) print*, 'improper permutation in lista'
-  alamda = 0.001
-  call mrqcof (x, y, sig, ndata, a, ma, lista, mfit, alpha, beta, chisq, &
-    smooth, avg, diff, wrt_scr, ntype, database, doas)
-  ochisq = chisq
-  do j = 1, ma
-    atry (j) = a (j)
-  end do
-end if
-do j = 1, mfit
-  do k = 1, mfit
-    covar (j, k) = alpha (j, k)
-  end do
-  covar (j, j) = alpha (j, j) * (1. + alamda)
-  da (j) = beta (j)
-end do
-call ludcmp (covar, mfit, mmax, index, even)
-call lubksb (covar, mfit, mmax, index, da)
+    
+!!$    iteration = iteration + 1
+!!$    ochisq = chisq
+!!$    do i = 1, nvaried
+!!$       var0 (lista (i)) = var (lista (i))
+!!$    end do
+!!$    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
+!!$         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
+!!$         funcs, alamda, avg, diff(1:npars), ntype, database)
+!!$    do i = 1, nvaried
+!!$       prop = abs (var0 (lista (i)) - var (lista (i)))
+!!$       difftest = provar * diff (lista (i))
+!!$       if (prop .gt. difftest) then
+!!$          go to 2
+!!$       end if
+!!$    end do
+!!$    iprovar = .true.
+!!$    if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
+!!$    go to 3
+!!$2   if (chisq .gt. ochisq) then
+!!$       itest = 0
+!!$    else if (abs (ochisq - chisq) .lt. delchi) then
+!!$       itest = itest + 1
+!!$    end if
+!!$    if (itest .lt. 2) then
+!!$       go to 1
+!!$    end if
+!!$3   alamda = 0.0
+!!$    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, &
+!!$         var(1:npars), npars, lista(1:npars), nvaried, covar(1:npars,1:npars), &
+!!$         alpha(1:npars,1:npars), chisq, funcs, alamda, delchi, smooth, avg, &
+!!$         diff(1:npars), wrt_scr, ntype, database, doas)
+!!$    if (wrt_scr) then
+!!$       write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
+!!$            iteration, 'chi-squared:', chisq, 'alamda:', alamda
+!!$       write (*,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
+!!$            iteration, 'chi-squared:', chisq, 'alamda:', alamda
+!!$    end if
+!!$    
+!!$    ! Calculate the correlation matrix.
+!!$    do i = 1, nvaried
+!!$       correl (i, i) = 1.
+!!$       do j = 1, i
+!!$          if (i .ne. j) correl (i, j) = covar (i, j) / sqrt (covar (i, i) * &
+!!$               covar (j, j))
+!!$       end do
+!!$    end do
+!!$    
+!!$    ! Calculate the final spectrum.
+!!$    call spectrum (np, npars, avg, pos(1:np), fit_spec(1:np), var(1:npars), ntype, database)
+!!$    
+!!$    ! Calculate the rms of the fit.
+!!$    rsum = 0.
+!!$    do i = 1, np
+!!$       rsum = rsum + ((fit_spec (i) - spec (i)) / sig (i))**2
+!!$    end do
+!!$    rms = sqrt (rsum / np)
+    
+    return
+  END SUBROUTINE specfit
 
-if (alamda .eq. 0.) then
-! Calculate inverse of curvature matrix to obtain covariance matrix.
-  inverse = identity
-  do j = 1, mfit
-!   call lubksb (covar, mfit, mmax, index, inverse (1, j))
-    call lubksb (covar, mfit, mmax, index, inverse (:, j))
-!   Luke Valin correction 31mar2014; answers are exactly the same
-  end do
-  covar = inverse
-  return
-end if
-do j = 1, mfit
-  atry (lista (j)) = a (lista (j)) + da (j)
-end do
-call mrqcof (x, y, sig, ndata, atry, ma, lista, mfit, covar, da, chisq, &
-  smooth, avg, diff, wrt_scr, ntype, database, doas)
-if (chisq .lt. ochisq) then
-  alamda = 0.1 * alamda
-  ochisq = chisq
-  do j = 1, mfit
-    do k = 1, mfit
-      alpha (j, k) = covar (j, k)
+  subroutine spectrum (npoints, npars, avg, pos, fit, var, fac, str, ntype, database)
+    
+    ! Spectrum calculation for both fitting and non-fitting cases. For fitting, it
+    ! is called with 4 different qualifiers ("ntypes") for purposes of determining
+    ! the calculation type and initializing the fitting reference database.
+    ! ntype = 1: Solar wavelength calibration. Open kpnospec, the high spectral
+    ! resolution irradiance reference spectrum.
+    ! ntype = 2: Radiance wavelength calibration (kpnospec already open).
+    ! ntype = 3: First radiance fit (fill refspec from database).
+    ! ntype = 4: Later radiance fits (refspec already filled).
+    IMPLICIT NONE
+
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: npoints, npars, ntype
+    REAL*8, INTENT(IN) :: avg
+    REAL*8, INTENT(IN), DIMENSION(1:npars) :: var, fac
+    REAL*8, INTENT(IN), DIMENSION(1:npoints) :: pos
+    CHARACTER(3), INTENT(IN), DIMENSION(1:npars) :: str
+
+    ! Output variables
+    REAL*8, INTENT(OUT), DIMENSION(1:npoints) :: fit
+
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(11,1:npoints) :: database
+
+    ! Local variables
+    CHARACTER(3), PARAMETER :: ad1_str='ad1', ad2_str='ad2', ble_str='ble', &
+         scp_str='Scp', bsp_str='Bsp'
+    INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
+    INTEGER*4 :: i, nsun, jmax, j
+    REAL*8 :: hw1e, sun_avg
+    REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline
+    REAL*8 :: sunpos(1:maxpts), refspec(1:maxpts,1:10)
+    REAL*8 :: sunpos_ss(maxpts),sunspec(maxpts)
+    REAL*8 :: sunspec_ss(maxpts)
+    REAL*8 :: suntemp(maxpts), reftemp(maxpts, 10)
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: d2sun
+    CHARACTER*120 :: kpnospec
+    LOGICAL :: first_sun=.true.
+    save
+    
+    if (ntype .eq. 1) then
+       if (first_sun) then
+          first_sun = .false.
+          if (wrt_scr) write (*, '(5x,a)') 'Reading high resolution solar spectrum...'          
+          read (*, '(a)') kpnospec
+          if (wrt_scr) write (*, '(5x,a)') '... from file '//TRIM(kpnospec)
+          ! Get total number of points in the spectrum file (so we can allocated space for them)
+          open (unit = 25, file = kpnospec, status='old')
+          nsun=0
+          do
+             read(25,*,END=11)
+             nsun=nsun+1
+          end do
+11        rewind(unit=25)
+          ! Allocate solar variables
+          ALLOCATE(kppos(1:nsun),kpspec(1:nsun),kppos_ss(1:nsun),kpspec_gauss(1:nsun))
+          ! Read solar spectrum
+          do i = 1, nsun     
+             read (25, *) kppos(i), kpspec(i)
+          end do
+          ! Normalize solar spectrum
+          sun_avg = SUM(kpspec(1:nsun)) / REAL(nsun,KIND=8)
+          kpspec(1:nsun) = kpspec(1:nsun) / sun_avg
+          close (unit = 25)
+       end if ! on first_sun
+    else if (ntype .eq. 3) then
+       ! The following kluge keeps me from extra re-writing.
+       nsun = npoints
+       do i = 1, nsun
+          sunpos (i) = pos (i)
+          sunspec (i) = database (1, i)
+          do j = 1, 10
+             refspec (i, j) = database (j + 1, i)
+          end do
+       end do
+       ! jmax used below for reference spectra calculations. It is the number of
+       ! reference spectra.
+       jmax = (npars - 12) / 4
+       if (smooth) then
+          do i = 1, nsun
+             suntemp (i) = sunspec (i)
+             do j = 1, 10
+                reftemp (i, j) = refspec (i, j)
+             end do
+          end do
+          do i = 3, npoints - 2
+             sunspec (i) = 0.375d0 * suntemp (i) + 0.25d0 * (suntemp (i + 1) + &
+                  suntemp (i - 1)) + 0.0625d0 * (suntemp (i + 2) + suntemp (i - 2))
+             do j = 1, 10
+                refspec (i, j) = 0.375d0 * reftemp (i, j) + 0.25d0 * &
+                     (reftemp (i + 1, j) + reftemp (i - 1, j)) + 0.0625d0 * &
+                     (reftemp (i + 2, j) + reftemp (i - 2, j))
+             end do
+          end do
+       end if ! on smoothing.
+       return ! ntype = 3, database loaded.
+    end if ! on ntype.
+    
+    ! Calculate the spectrum: First do the shift and squeeze. Shift var (nshi),
+    ! squeeze by 1 + var (nsqe); do in absolute sense, to make it easy to back-convert
+    ! radiance data.
+    do i = 1, nsun
+       if (ntype .eq. 1 .or. ntype .eq. 2) then
+          kppos_ss (i) = kppos (i) * (1.d0 + var(nsqe)) + var(nshi)
+       else
+          sunpos_ss (i) = sunpos (i) * (1.d0 + var(nsqe)) + var(nshi)
+       end if
     end do
-    beta (j) = da (j)
-    a (lista (j)) = atry (lista (j))
-  end do
-else
-  alamda = 10. * alamda
-  chisq = ochisq
-end if
+    
+    ! Broadening and re-sampling of solar spectrum.
+    if (ntype .eq. 1 .or. ntype .eq. 2) then
+       ! Case for wavelength fitting of irradiance and radiance.
+       ! Broaden the solar reference by the hw1e value.
+       hw1e = var(nhwe)
+       call gauss (kppos_ss, kpspec, kpspec_gauss, nsun, hw1e)
+       ! Re-sample the solar reference spectrum to the radiance grid.
+       ALLOCATE(d2sun(1:nsun))
+       call spline (kppos_ss, kpspec_gauss, nsun, d2sun)
+       call splint (kppos_ss, kpspec_gauss, d2sun, nsun, npoints, pos, sunspec_ss)
+       DEALLOCATE(d2sun)
+    else
+       ! Re-sample the solar reference spectrum to the radiance grid.
+       ALLOCATE(d2sun(1:nsun))
+       call spline (sunpos_ss, sunspec, nsun, d2sun)
+       call splint (sunpos_ss, sunspec, d2sun, nsun, npoints, pos, sunspec_ss)
+       DEALLOCATE(d2sun)
+    end if
 
-return
-end subroutine mrqmin
-!
-subroutine mrqcof (x, y, sig, ndata, a, ma, lista, mfit, alpha, beta, chisq, &
-  smooth, avg, diff, wrt_scr, ntype, database, doas)
-
-! Calculates chi-squared gradient and curvature matrices for the Levenberg-
-! Marquardt minimization. From Numerical Recipes.
-
-implicit real * 8 (a - h, o - z)
-parameter (mmax = 64)
-parameter (maxpts = 2000)
-dimension y (maxpts), x (maxpts), sig (maxpts), alpha (mmax, mmax), &
-  beta (mmax), dyda (mmax, maxpts), lista (mmax), a (mmax), ymod (maxpts), &
-  diff (mmax)
-logical wrt_scr, smooth, doas
-dimension database (11, maxpts)
-save
-do j = 1, mfit
-  do k = 1, j
-    alpha (j, k) = 0.
-  end do
-  beta (j) = 0.
-end do
-chisq = 0.
-print*, ntype
-call funcs (x, ndata, a, ymod, dyda, ma, lista, mfit, smooth, avg, diff, &
-  wrt_scr, ntype, database, doas)
-print*, 'After funcs'
-do i = 1, ndata
-  sig2i = 1./ (sig (i) * sig (i))
-  dy = y (i) - ymod (i)
-  do j = 1, mfit
-    wt = dyda (lista (j), i) * sig2i
-    do k = 1, j
-      alpha (j, k) = alpha (j, k) + wt * dyda (lista (k), i)
+    ! Add contributions from each  variable
+    ! First add albedo contribution
+    fit(1:npoints) = var(nalb) * sunspec_ss(1:npoints)
+    ! Now loop over the rest of parameters to add BOAS, and polynomial contributions
+    ! Initial add-on contributions
+    do i = 1, npars
+       IF (str(i) .EQ. ad1_str) fit(1:npoints) = fit(1:npoints) + var(i) * refspec(1:npoints,i)
     end do
-    beta (j) = beta (j) + dy * wt
-  end do
-  chisq = chisq + dy * dy * sig2i
-end do
-do j = 2, mfit
-  do k = 1, j - 1
-    alpha (k, j) = alpha (j, k)
-  end do
-end do
+    ! Beer's law contributions
+    do i = 1, npars
+       IF (str(i) .EQ. ble_str) fit(1:npoints) = fit(1:npoints) * dexp(-var(i) * refspec(1:npoints,i))
+    end do
+    ! Final add-on contributions
+    do i = 1, npars
+       IF (str(i) .EQ. ad2_str) fit(1:npoints) = fit(1:npoints) + var(i) * refspec(1:npoints,i)
+    end do
+    ! Polynomials
+    del(1:npoints) = pos(1:npoints) - avg
+    ! Scaling polynomial
+    scaling(1:npoints) = 0.0d0
+    do i = 1, npars
+       IF (str(i) .EQ. scp_str) scaling(1:npoints) = scaling(1:npoints) + var(i) * del(1:npoints)**fac(i)
+    end do
+    fit(1:npoints) = fit(1:npoints) * scaling(1:npoints)
+    ! Baseline polynomial
+    baseline(1:npoints) = 0.0d0
+    do i = 1, npars
+       IF (str(i) .EQ. bsp_str) baseline(1:npoints) = baseline(1:npoints) + var(i) * del(1:npoints)**fac(i)
+    end do
+    fit(1:npoints) = fit(1:npoints) + baseline(1:npoints)
 
-return
-end subroutine mrqcof
-!
+!!$    ! Add up the contributions, with solar intensity as var (13), trace species
+!!$    ! beginning at var (13), to include possible linear and Beer's law forms. Do
+!!$    ! these as linear-Beer's-linear. In order to do DOAS I need to be careful to
+!!$    ! include just linear contributions, which I already high-pass filtered.
+!!$    
+!!$    ! DOAS here - the spectrum to be fitted needs to be re-defined.
+!!$    if (doas .and. ntype .eq. 4) then
+!!$       do i = 1, npoints
+!!$          !   For DOAS, var (9) should == 1., and not be varied.
+!!$          fit (i) = var (13) * dlog (sunspec_ss (i))
+!!$          !   Ring adjustment.
+!!$          fit (i) = fit (i) + var (13) * (refspec (i, 1) / sunspec_ss (i))
+!!$          do j = 2, jmax
+!!$             fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
+!!$          end do
+!!$       end do
+!!$    else
+!!$       ! Doing BOAS.
+!!$       do i = 1, npoints
+!!$          fit (i) = var(nalb) * sunspec_ss(i)
+!!$          !   Initial add-on contributions.
+!!$          do j = 1, jmax
+!!$             fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
+!!$          end do
+!!$          !   Beer's law contributions.
+!!$          do j = 1, jmax
+!!$             fit (i) = fit (i) * dexp (- var (4 * j + 10) * refspec (i, j))
+!!$          end do
+!!$          !   Final add-on contributions.
+!!$          do j = 1, jmax
+!!$             fit (i) = fit (i) + var (4 * j + 11) * refspec (i, j)
+!!$          end do
+!!$       end do
+!!$    end if
+    
+    ! Add the scaling.
+!!$    do i = 1, npoints
+!!$       del = pos (i) - avg
+!!$       fit (i) = fit (i) * (var (5) + del * var (6) + (del**2) * var (7) + &
+!!$            (del**3) * var (8))
+!!$    end do
+    
+    ! Add baseline parameters.
+!!$    do i = 1, npoints
+!!$       del = pos (i) - avg
+!!$       fit (i) = fit (i) + var (1) + del * var (2) + (del**2) * var (3) + &
+!!$            (del**3) * var (4)
+!!$    end do
+    
+    return
+  end subroutine spectrum
+  !
+  subroutine mrqmin (x, y, sig, ndata, a, fac, str, ma, lista, mfit, &
+       funcs, alamda, avg, diff, ntype, database)
+    
+    ! Levenberg-Marquardt minimization adapted from Numerical Recipes.
+    IMPLICIT NONE
+    ! Input variables
+    REAL*8, INTENT(IN), DIMENSION(1:ndata) :: x, y, sig
+    REAL*8, INTENT(IN), DIMENSION(1:ma) :: diff, fac
+    REAL*8, INTENT(IN) :: avg
+    INTEGER*4, INTENT(IN) :: ndata, ma, mfit, ntype
+    CHARACTER(3), INTENT(IN), DIMENSION(1:ma) :: str
+    
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:ma) :: a
+    REAL*8, INTENT(INOUT), DIMENSION(11,ndata) :: database
+    REAL*8, INTENT(INOUT) :: alamda
+    INTEGER*4, INTENT(INOUT), DIMENSION(1:ma) :: lista
+    
+    ! Local variables
+    REAL*8 :: ochisq, even
+    REAL*8, DIMENSION(1:ma) :: atry, beta, da
+    REAL*8, DIMENSION(1:ma,1:ma) :: identity, inverse
+    LOGICAL :: first_call = .TRUE.
+    INTEGER*4 :: j,k,kk,ihit
+    INTEGER*4, DIMENSION(1:mfit) :: index
+    
+    external funcs
+    save
+    
+    if (first_call) then
+       first_call = .false.
+       identity = 0.d0
+       do j = 1, ma
+          identity (j, j) = 1.d0
+       end do
+    end if
+    if (alamda .lt. 0.) then
+       kk = mfit + 1
+       do j = 1, ma
+          ihit = 0
+          do k = 1, mfit
+             if (lista (k) .eq. j) ihit = ihit + 1
+          end do
+          if (ihit .eq. 0) then
+             lista (kk) = j
+             kk = kk + 1
+          else if (ihit .gt. 1) then
+             print*, 'improper permutation in lista'
+          end if
+       end do
+       if (kk .ne. (ma + 1)) print*, 'improper permutation in lista'
+       alamda = 0.001
+       call mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, beta, &
+            avg, diff, ntype, database)
+       ochisq = chisq
+       do j = 1, ma
+          atry (j) = a (j)
+       end do
+    end if
+    do j = 1, mfit
+       do k = 1, mfit
+          covar (j, k) = alpha (j, k)
+       end do
+       covar (j, j) = alpha (j, j) * (1. + alamda)
+       da (j) = beta (j)
+    end do
+    call ludcmp (covar, mfit, ma, index, even)
+    call lubksb (covar, mfit, ma, index, da)
+    
+    if (alamda .eq. 0.) then
+       ! Calculate inverse of curvature matrix to obtain covariance matrix.
+       inverse = identity
+       do j = 1, mfit
+          !   call lubksb (covar, mfit, ma, index, inverse (1, j))
+          call lubksb (covar, mfit, ma, index, inverse (:, j))
+          !   Luke Valin correction 31mar2014; answers are exactly the same
+       end do
+       covar = inverse
+       return
+    end if
+    do j = 1, mfit
+       atry (lista (j)) = a (lista (j)) + da (j)
+    end do
+    call mrqcof (x, y, sig, ndata, atry, fac, str, ma, lista, mfit, covar, da, &
+         avg, diff, ntype, database)
+    if (chisq .lt. ochisq) then
+       alamda = 0.1 * alamda
+       ochisq = chisq
+       do j = 1, mfit
+          do k = 1, mfit
+             alpha (j, k) = covar (j, k)
+          end do
+          beta (j) = da (j)
+          a (lista (j)) = atry (lista (j))
+       end do
+    else
+       alamda = 10. * alamda
+       chisq = ochisq
+    end if
+    
+    return
+  end subroutine mrqmin
+
+  subroutine mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, beta, &
+       avg, diff, ntype, database)
+    
+    ! Calculates chi-squared gradient and curvature matrices for the Levenberg-
+    ! Marquardt minimization. From Numerical Recipes.
+    IMPLICIT NONE
+
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: ndata, ma, mfit, ntype
+    INTEGER*4, INTENT(IN), DIMENSION(1:ma) :: lista
+    REAL*8, INTENT(IN) :: avg
+    REAL*8, INTENT(IN), DIMENSION(1:ndata) :: x, y, sig
+    REAL*8, INTENT(IN), DIMENSION(1:ma) :: a, diff, fac
+    CHARACTER(3), INTENT(IN), DIMENSION(1:ma) :: str
+
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:ma) :: beta
+    REAL*8, INTENT(INOUT), DIMENSION(1:ma,1:ma) :: alpha
+    REAL*8, INTENT(INOUT), DIMENSION(11,1:ndata) :: database
+
+    ! Local variabes
+    REAL*8, DIMENSION(1:ma,1:ndata) :: dyda
+    REAL*8, DIMENSION(1:ndata) :: ymod
+    REAL*8 :: sig2i, dy, wt
+    INTEGER*4 :: j, k, i
+    save
+
+    do j = 1, mfit
+       do k = 1, j
+          alpha (j, k) = 0.
+       end do
+       beta (j) = 0.
+    end do
+    chisq = 0.
+    call funcs (x, ndata, a, fac, str, ymod, dyda, ma, lista, mfit, avg, diff, &
+         ntype, database)
+    do i = 1, ndata
+       sig2i = 1./ (sig (i) * sig (i))
+       dy = y (i) - ymod (i)
+       do j = 1, mfit
+          wt = dyda (lista (j), i) * sig2i
+          do k = 1, j
+             alpha (j, k) = alpha (j, k) + wt * dyda (lista (k), i)
+          end do
+          beta (j) = beta (j) + dy * wt
+       end do
+       chisq = chisq + dy * dy * sig2i
+    end do
+    do j = 2, mfit
+       do k = 1, j - 1
+          alpha (k, j) = alpha (j, k)
+       end do
+    end do
+    
+    return
+  end subroutine mrqcof
+
 SUBROUTINE write_input()
 
 IMPLICIT NONE
@@ -1278,7 +1401,7 @@ subroutine gauss (pos, spec, specmod, npoints, hw1e)
 ! (half-width at 1/e intensity). For evenly-spaced spectra.
 
 implicit real*8 (a - h, o - z)
-parameter (maxkpno = 7000)
+parameter (maxkpno = 100000)
 dimension pos (maxkpno), spec (maxkpno)
 dimension specmod (maxkpno), slit (maxkpno)
 save
@@ -1384,7 +1507,7 @@ subroutine spline(x, y, n, y2)
 ! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
 
 implicit real*8 (a - h, o - z)
-parameter (maxkpno = 7000)
+parameter (maxkpno = 100000)
 dimension x (n), y (n), y2 (n), u (maxkpno)
 save
 
@@ -2100,138 +2223,171 @@ end subroutine lfit
 subroutine ludcmp (a, n, np, indx, d)
 
 ! LU decomposition, from Numerical Recipes.
+  IMPLICIT NONE
+  
+  ! Input variables
+  INTEGER*4, INTENT(IN) :: n, np
+ 
+  ! Modified variables
+  REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
+  REAL*8, INTENT(INOUT) :: d
+  INTEGER*4, INTENT(INOUT), DIMENSION(1:np) :: indx
 
-implicit real*8 (a - h, o - z)
-parameter (nmax = 100, tiny = 1.0d-20)
-dimension a (np, np), indx (n), vv (nmax)
-d = 1.
+  ! Local variables
+  REAL*8, PARAMETER :: tiny = 1.0d-20
+  REAL*8, DIMENSION(1:n) :: vv 
+  REAL*8 :: aamax, sum, dum
+  INTEGER*4 :: i, j, k, imax
+  d = 1.
 
-do i = 1, n
-  aamax = 0.d0
+  do i = 1, n
+     aamax = 0.d0
+     do j = 1, n
+        if (abs (a (i, j)) .gt. aamax) aamax = abs (a (i, j))
+     end do
+     if (aamax .eq. 0.) print*, 'singular matrix.'
+     vv (i) = 1.d0 / aamax
+  end do
   do j = 1, n
-    if (abs (a (i, j)) .gt. aamax) aamax = abs (a (i, j))
-  end do
-  if (aamax .eq. 0.) print*, 'singular matrix.'
-  vv (i) = 1.d0 / aamax
-end do
-do j = 1, n
-  if (j .gt. 1) then
-    do i = 1, j - 1
-      sum = a (i, j)
-      if (i .gt. 1)then
-        do k = 1, i - 1
-          sum = sum - a (i, k) * a (k, j)
+     if (j .gt. 1) then
+        do i = 1, j - 1
+           sum = a (i, j)
+           if (i .gt. 1)then
+              do k = 1, i - 1
+                 sum = sum - a (i, k) * a (k, j)
+              end do
+              a (i, j) = sum
+           end if
         end do
-        a (i, j) = sum
-      end if
-    end do
-  end if
-  aamax = 0.d0
-  do i = j, n
-    sum = a (i, j)
-    if (j .gt. 1)then
-      do k = 1, j - 1
-        sum = sum - a (i, k) * a (k, j)
-      end do
-      a (i, j) = sum
-    end if
-    dum = vv (i) * abs (sum)
-    if (dum .ge. aamax) then
-      imax = i
-      aamax = dum
-    end if
+     end if
+     aamax = 0.d0
+     do i = j, n
+        sum = a (i, j)
+        if (j .gt. 1)then
+           do k = 1, j - 1
+              sum = sum - a (i, k) * a (k, j)
+           end do
+           a (i, j) = sum
+        end if
+        dum = vv (i) * abs (sum)
+        if (dum .ge. aamax) then
+           imax = i
+           aamax = dum
+        end if
+     end do
+     if (j .ne. imax) then
+        do k = 1, n
+           dum = a (imax, k)
+           a (imax, k) = a (j, k)
+           a (j, k) = dum
+        end do
+        d = -d
+        vv (imax) = vv (j)
+     end if
+     indx (j) = imax
+     if (j .ne. n) then
+        if (a (j, j) .eq. 0.) a (j, j) = tiny
+        dum = 1.d0 / a (j, j)
+        do i = j + 1, n
+           a (i, j) = a (i, j) * dum
+        end do
+     end if
   end do
-  if (j .ne. imax) then
-    do k = 1, n
-      dum = a (imax, k)
-      a (imax, k) = a (j, k)
-      a (j, k) = dum
-    end do
-    d = -d
-    vv (imax) = vv (j)
-  end if
-  indx (j) = imax
-  if (j .ne. n) then
-    if (a (j, j) .eq. 0.) a (j, j) = tiny
-    dum = 1.d0 / a (j, j)
-    do i = j + 1, n
-      a (i, j) = a (i, j) * dum
-    end do
-  end if
-end do
-if (a (n, n) .eq. 0.) a (n, n) = tiny
-
-return
+  if (a (n, n) .eq. 0.) a (n, n) = tiny
+  
+  return
 end subroutine ludcmp
 !
 subroutine lubksb (a, n, np, indx, b)
 
-! LU forward- and back-substitution, from Numerical Recipes.
+  ! LU forward- and back-substitution, from Numerical Recipes.
+  IMPLICIT NONE
 
-implicit real*8 (a - h, o - z)
-dimension a (np, np), indx (n), b (n)
+  ! Input variables
+  INTEGER*4, INTENT(IN) :: n, np
 
-ii = 0
-do i = 1, n
-  ll = indx (i)
-  sum = b (ll)
-  b (ll) = b (i)
-  if (ii .ne. 0) then
-    do j = ii, i - 1
-      sum = sum-a (i, j) * b (j)
-    end do
-  else if (sum .ne. 0.) then
-    ii = i
-  end if
-  b (i) = sum
-end do
-do i = n, 1, -1
-  sum = b (i)
-  if (i .lt. n) then
-    do j = i + 1, n
-      sum = sum - a (i, j) * b (j)
-    end do
-  end if
-  b (i) = sum / a (i, i)
-end do
+  ! Modified variables
+  REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
+  REAL*8, INTENT(INOUT), DIMENSION(1:n) :: b
+  INTEGER*4, INTENT(INOUT), DIMENSION(1:n) :: indx
 
-return
+  ! Local variables
+  REAL*8 :: sum
+  INTEGER*4 :: ii, i, ll, j
+
+  ii = 0
+  do i = 1, n
+     ll = indx (i)
+     sum = b (ll)
+     b (ll) = b (i)
+     if (ii .ne. 0) then
+        do j = ii, i - 1
+           sum = sum-a (i, j) * b (j)
+        end do
+     else if (sum .ne. 0.) then
+        ii = i
+     end if
+     b (i) = sum
+  end do
+  do i = n, 1, -1
+     sum = b (i)
+     if (i .lt. n) then
+        do j = i + 1, n
+           sum = sum - a (i, j) * b (j)
+        end do
+     end if
+     b (i) = sum / a (i, i)
+  end do
+
+  return
 end subroutine lubksb
+
 
 END MODULE GASFIT_MODULE
 
-subroutine funcs (pos, npoints, vars, ymod, dyda, npars, lista, nvaried, &
-  smooth, avg, diff, wrt_scr, ntype, database, doas)
+SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvaried, &
+     avg, diff, ntype, database)
 
-USE gasfit_module, ONLY: spectrum
-! Calculates the spectrum and its derivatives for mrqcof.
+  USE gasfit_module, ONLY: spectrum, smooth, wrt_scr, doas
 
-implicit real*8 (a - h, o - z)
-parameter (mmax = 64)
-parameter (maxpts = 7000)
-dimension lista (mmax)
-dimension pos (maxpts), ymod (maxpts), dyplus (maxpts)
-dimension diff (mmax), dyda (mmax, maxpts), vars (mmax)
-logical wrt_scr, smooth, doas
-dimension database (11, maxpts)
-save
+  ! Calculates the spectrum and its derivatives for mrqcof.
+  IMPLICIT NONE
+  
+  ! Input variables
+  INTEGER*4, INTENT(IN) :: npoints, npars, nvaried, ntype
+  REAL*8 :: avg
+  REAL*8, INTENT(IN), DIMENSION(1:npoints) :: pos
+  REAL*8, INTENT(IN), DIMENSION(1:npars) :: diff, vars, fac
+  INTEGER*4, INTENT(IN), DIMENSION(1:npars) :: lista
+  CHARACTER(3), INTENT(IN), DIMENSION(1:npars) :: str
+  
+  ! Modified variables
+  REAL*8, INTENT(INOUT), DIMENSION(1:npoints) :: ymod
+  REAL*8, INTENT(INOUT), DIMENSION(1:npars,1:npoints) :: dyda
+  REAL*8, INTENT(INOUT), DIMENSION(11,1:npoints) :: database
+  
+  ! Local variables
+  INTEGER*4 :: i, j
+  REAL*8 :: var0
+  REAL*8, DIMENSION(1:npoints) :: dyplus
+  REAL*8, DIMENSION(1:npars) :: vars0
+  save  
 
-! Calculate the spectrum.
-call spectrum (npoints, npars, smooth, avg, pos, ymod, vars, wrt_scr, ntype, &
-database, doas)
+  ! Calculate the spectrum.
+  call spectrum (npoints, npars, avg, pos, ymod, vars, fac, str, ntype, database)
 
-! Calculate the derivatives by finite differences. dyplus is y (var + finite
-! difference in variable)
-do i = 1, nvaried
-  var0 = vars (lista (i))
-  vars (lista (i)) = vars (lista (i)) + diff (lista (i))
-  call spectrum (npoints, npars, smooth, avg, pos, dyplus, vars, wrt_scr, &
-    ntype, database, doas)
-  do j = 1, npoints
-    dyda (lista (i), j) = (dyplus (j) - ymod (j)) / diff (lista (i))
+  ! Calculate the derivatives by finite differences. dyplus is y (var + finite
+  ! difference in variable)
+  vars0 =vars
+  do i = 1, nvaried
+     var0 = vars0 (lista (i))
+     vars0 (lista (i)) = vars0 (lista (i)) + diff (lista (i))
+     call spectrum (npoints, npars, avg, pos, dyplus, vars0, fac, str, ntype, database)
+     do j = 1, npoints
+        dyda (lista (i), j) = (dyplus (j) - ymod (j)) / diff (lista (i))
+     end do
+     vars0 (lista (i)) = var0
   end do
-  vars (lista (i)) = var0
-end do
 
-return
-end subroutine funcs
+  return
+END SUBROUTINE funcs
