@@ -2,7 +2,7 @@ MODULE GASFIT_MODULE
 
 ! General control input variables
   CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line
-  LOGICAL :: wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, if_residuals
+  LOGICAL :: wrt_scr, write_fit, write_spec, mirror, autodiff, if_residuals
   INTEGER*4 :: npoints, nfirstfit
   REAL*8 :: delchi, provar, automult
   
@@ -55,11 +55,11 @@ CONTAINS
     ! Fits an orbit of satellite-measured Earth radiance spectra, or a sequence of
     ! ground-based atmospheric spectra.
     !
-    ! This version of the gas fitting code includes the option to do BOAS or DOAS
+    ! This version of the gas fitting code includes the option to do BOAS
     ! fitting, that is to fit radiances directly, or to fit a high-pass filtered
     ! logarithm of (radiance / irradiance). BOAS normally gives an improvement of a
     ! factor of 2-3 in the fitting statistics, with average parameter values very
-    ! close to the same. DOAS usually runs somewhat faster.
+    ! close to the same.
     
     ! Please communicate any corrections, additions and improvements:
     
@@ -118,10 +118,6 @@ CONTAINS
     !
     ! If (wrt_scr) enter a more verbose manner of running.
     !
-    ! If (smooth) smooth the spectra and reference spectra before fitting. not
-    ! recommended, but implemented for comparison with results of colleagues who
-    ! smooth rather than correct for spectral undersampling.
-    !
     ! If (write_fit) write conditions and diagnostics to an output file. this is
     ! not the same as writing out the fitting results, which is done automatically.
     !
@@ -137,13 +133,6 @@ CONTAINS
     ! approach to fitting, provided no initial parameter guesses are zero or very
     ! close to it.
     !
-    ! If (doas) then do a DOAS (differential optical absorption spectroscopy) fit
-    ! rather than a BOAS (basic optical absorption spectroscopy) fit. Useful to
-    ! compare results and processing speed. DOAS was developed for ground-based
-    ! measurements where the baseline could not reliably be fitted. For satellite
-    ! measurements it is normally not necessary nor an improvement to the fitting
-    ! results.
-    !
     ! If (if_residuals) write out the averaged fitting residual at the end of the
     ! spectral fitting results. Used to generate the "common mode" correction for
     ! systematic fitting residuals initially implemented at SAO.
@@ -151,7 +140,7 @@ CONTAINS
     read (21, '(a)') inputline
     read (21, '(a)') general_line
     read (21, *) npoints, delchi, provar, automult
-    read (21, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, doas, &
+    read (21, *) wrt_scr, write_fit, write_spec, mirror, autodiff, &
          if_residuals
     
     ! Read solar fitting parameters:
@@ -209,37 +198,6 @@ CONTAINS
             sun_par_str(i), var_sun_factor(i), sun_par_names(i)
     end do
     
-    ! Use strings to assign specific fitting parameter indices
-    do i = 1, n_solar_pars
-       IF (sun_par_str(i) .EQ. alb_str) nalb = i 
-       IF (sun_par_str(i) .EQ. hwe_str) nhwe = i 
-       IF (sun_par_str(i) .EQ. shi_str) nshi = i 
-       IF (sun_par_str(i) .EQ. sqe_str) nsqe = i 
-       IF (sun_par_str(i) .EQ. sha_str) nsha = i 
-       IF (sun_par_str(i) .EQ. asy_str) nasy = i 
-    end do
-    
-    ! Automatic difference-taking
-    if (autodiff) then
-       do i = 1, n_solar_pars
-          if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
-       end do 
-    end if
-
-    ! Order the parameters for mrqmin (housekeeping for the fitting process) and
-    ! save the initial values of the parameters, in case they are required at some
-    ! later stage. At present, just used in writing the fitting output file.
-    nvar_sun = 0
-    do i = 1, n_solar_pars
-       init_sun (i) = var_sun (i)
-       if (if_var_sun (i)) then
-          nvar_sun = nvar_sun + 1
-          list_sun (nvar_sun) = i
-       end if
-    end do
-
-    if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
-    
     ! Read radiance fitting parameters:
     !
     ! radiance_line is a comment that may be echoed in the output.
@@ -247,7 +205,7 @@ CONTAINS
     ! If (iterate_rad) fit the radiances.
     !
     ! If (renorm) renormalize radiances to their weighted average before fitting.
-    ! Numerical overflow insurance. Good for BOAS, don't normally use with DOAS.
+    ! Numerical overflow insurance. Good for BOAS.
     !
     ! If (weight_rad) ) make the fit a weighted fit, as with weight_sun.
     !
@@ -267,8 +225,7 @@ CONTAINS
     ! report_mult is a multiplier for its value and fitting uncertainty. report_mult
     ! is required because the reference spectra are scaled (below) to avoid
     ! potential numerical underflow issues. The fitted parameter values must be
-    ! scaled by the  same amount (if (.not. doas)). If (doas), report_mult should be
-    ! the negative of the scalar for the reported parameter.
+    ! scaled by the  same amount
     !
     ! Ground pixels (scenes) with solar zenith angle (sza) <= szamax, (sza) => szamin,
     ! latitudes <= latmax, and latitudes >= latmin are analyzed.
@@ -338,6 +295,7 @@ CONTAINS
     if (write_spec) then
        if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
        read (*, '(a)') specout
+       if (wrt_scr) write (*,'(a)') 'Opening file... '//TRIM(specout)
        open (unit = 24, file = specout, status='unknown')
     end if
     
@@ -378,9 +336,44 @@ CONTAINS
     ! iteration begins.
     iprovar = .false.
     if (iterate_sun) then
+
+    
+       ! Use strings to assign specific fitting parameter indices
+       do i = 1, n_solar_pars
+          IF (sun_par_str(i) .EQ. alb_str) nalb = i 
+          IF (sun_par_str(i) .EQ. hwe_str) nhwe = i 
+          IF (sun_par_str(i) .EQ. shi_str) nshi = i 
+          IF (sun_par_str(i) .EQ. sqe_str) nsqe = i 
+          IF (sun_par_str(i) .EQ. sha_str) nsha = i 
+          IF (sun_par_str(i) .EQ. asy_str) nasy = i 
+       end do
+       
+       ! Automatic difference-taking
+       if (autodiff) then
+          do i = 1, n_solar_pars
+             if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
+          end do
+       end if
+       
+       ! Order the parameters for mrqmin (housekeeping for the fitting process) and
+       ! save the initial values of the parameters, in case they are required at some
+       ! later stage. At present, just used in writing the fitting output file.
+       nvar_sun = 0
+       do i = 1, n_solar_pars
+          init_sun (i) = var_sun (i)
+          if (if_var_sun (i)) then
+             nvar_sun = nvar_sun + 1
+             list_sun (nvar_sun) = i
+          end if
+       end do
+       if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
+       
+       ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
        ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
             fit(1:npoints))
        correl = 0.0d0; covar=0.0d0; fit=0.0d0
+
+       ! Perform fit
        call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
             avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
             fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
@@ -396,11 +389,7 @@ CONTAINS
        write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
        write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
        write (*, *) 'nvar_sun = ', nvar_sun
-       
-       ! Freeze variation of slit width for radiance fitting is not currently
-       ! implemented.
-       ! if_var_sun (10) = .false.
-       
+              
        ! Set width for later use in undersampling correction. hw1e means the gaussian
        ! half-width at 1/e of the maximum intensity.
        hw1e = var_sun (nhwe)
@@ -408,14 +397,18 @@ CONTAINS
             float (npoints - nvar_sun))
        write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
 
+       ! Deallocate variables needed for fitting
        DEALLOCATE(correl, covar, fit)       
-       DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
-            var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
-            sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
-            sun_par_str, var_sun_factor)
+
     end if ! on iterate_sun
     write (*, *) 'finished with iterate_sun'
 
+    ! Deallocate variables
+    DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
+         var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
+         sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
+         sun_par_str, var_sun_factor)
+    
     stop
 
        ! Initialize several diagnostics.
@@ -540,9 +533,9 @@ CONTAINS
 !!$          avg = asum / ssum
 !!$       end if
 !!$       iprovar = .false.
-!!$  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, iteration, smooth, &
+!!$  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, iteration, &
 !!$    avg, spec, pos, sig, fit, var_sun, chisq, delchi, diffsun, correl, covar, &
-!!$    rms, provar, iprovar, wrt_scr, 2, database, doas)
+!!$    rms, provar, iprovar, wrt_scr, 2, database)
 !!$  dshift = rms * sqrt (covar (10, 10) * float (npoints) / float (npoints - &
 !!$    nvar_sun))
 !!$       write (*, '(a, 1p2e14.6)') 'rad: shift, 1 sigma = ', - var_sun (11), dshift
@@ -574,22 +567,8 @@ CONTAINS
 !!$       database (1, i) = spline_sun (i)
 !!$       database (9, i) = underspec (1, i)
 !!$       database (10, i) = underspec (2, i)
-!!$       ! Set up Ring spectrum for high pass filtering of divided spectrum (afterward,
-!!$       ! add solar spectrum back in order to divide by solar spectrum with altered
-!!$       ! wavelength calibration in subroutine spectrum) - DOAS fitting only.
-!!$       if (doas) then
-!!$          database (2, i) = database (2, i) / spline_sun (i)
-!!$       end if
 !!$    end do
-!!$    
-!!$    ! For the DOAS case, high-pass filter the reference spectra.
-!!$    if (doas) then
-!!$       call subtract_cubic (pos, npoints, database, ll_rad, lu_rad)
-!!$       do i = 1, npoints
-!!$          database (2, i) = database (2, i) * spline_sun (i)
-!!$       end do
-!!$    end if
-!!$    
+!!$      
 !!$    ! Load database using nfirst wavelength scale.
 !!$    call spectrum (npoints, npars, avg, pos, fit, var, var_factor, par_str, 3, database)
 !!$    
@@ -601,8 +580,7 @@ CONTAINS
 !!$          spec (j) =  spec_rad (i, j)
 !!$       end do
 !!$       
-!!$       ! Renormalize, if requested (normally don't do for DOAS since we are dividing
-!!$       ! by the solar spectrum just below, and logarithmizing).
+!!$       ! Renormalize, if requested
 !!$       if (renorm) then
 !!$          remult = 0.d0
 !!$          if (weight_rad) then
@@ -623,35 +601,6 @@ CONTAINS
 !!$          end do
 !!$       end if
 !!$       
-!!$       ! High pass filtering for DOAS. First, take log (rad/irrad), then filter by
-!!$       ! subtracting a cubic, then re-add the log (irradiance). This way we are fitting
-!!$       ! the log (rad) with the proper filtering having been done. The spectrum
-!!$       ! subroutine will start by subtracting the irradiance spectrum, where the proper
-!!$       ! shifting and squeezing can take place. In this high-pass filtering, we ignore
-!!$       ! the small extra wavelength calibration change, as for Ring effect, above.
-!!$       if (doas) then
-!!$          do j = 1, npoints
-!!$             spec (j) = dlog (spec (j) / spline_sun (j))
-!!$          end do
-!!$          call subtract_cubic_meas (pos, npoints, spec, ll_rad, lu_rad)
-!!$          do j = 1, npoints
-!!$             spec (j) = spec (j) + dlog (spline_sun (j))
-!!$          end do
-!!$       end if
-!!$       
-!!$       ! Apply smoothing (1/16,1/4,3/8,1/4,1/16); 2/98 UHE/IFE recommendation: This is
-!!$       ! done by several colleagues as an alternative to undersampling correction. It
-!!$       ! is included here in case it is needed for comparison, but is not normally
-!!$       ! needed or used (or desired).
-!!$       if (smooth) then
-!!$          do j = 1, npoints
-!!$             temp (j) = spec (j)
-!!$          end do
-!!$          do j = 3, npoints - 2
-!!$             spec (j) = 0.375d0 * temp (j) + 0.25d0 * (temp (j + 1) + temp (j - 1)) + &
-!!$                  0.0625d0 * (temp (j + 2) + temp (j - 2))
-!!$          end do
-!!$       end if
 !!$       if (.not. weight_rad) then
 !!$          avg = (pos (npoints) + pos (1)) / 2.
 !!$       else
@@ -672,10 +621,10 @@ CONTAINS
 !!$             end do
 !!$          end if
 !!$          
-!!$          !   BOAS or DOAS fitting now done here.
-!!$    call specfit (npoints, npars, nvaried, list_rad, iteration, smooth, avg, &
+!!$          !   BOAS fitting now done here.
+!!$    call specfit (npoints, npars, nvaried, list_rad, iteration, avg, &
 !!$      spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, &
-!!$      provar, iprovar, wrt_scr, 4, database, doas)
+!!$      provar, iprovar, wrt_scr, 4, database)
 
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
@@ -736,8 +685,8 @@ CONTAINS
 !!$       write (22, '(a)') inputline
 !!$       write (22, '(a)') general_line
 !!$       write (22, '(i5, 1p2e12.4, 0pf8.4)') npoints, delchi, provar, automult
-!!$       write (22, *) wrt_scr, smooth, write_fit, write_spec, mirror, autodiff, &
-!!$            doas, if_residuals
+!!$       write (22, *) wrt_scr, write_fit, write_spec, mirror, autodiff, &
+!!$            if_residuals
 !!$       write (22, '(a)') solar_line
 !!$       write (22, '(2l2, 3i4, 1pe9.2)') iterate_sun, weight_sun, n_solar_pars, &
 !!$            ll_sun, lu_sun, div_sun
@@ -762,8 +711,7 @@ CONTAINS
   END SUBROUTINE GASFIT
 
   SUBROUTINE specfit (np, npars, nvaried, lista, avg, &
-       spec, pos, sig, fit_spec, &
-       var, diff, fac, str, iprovar, ntype, database)
+       spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, ntype, database)
     ! Driver for Levenberg-Marquardt nonlinear least squares minimization.
     
     IMPLICIT NONE
@@ -787,10 +735,8 @@ CONTAINS
     REAL*8 :: alamda, ochisq, difftest, prop, rsum
     REAL*8, DIMENSION(1:npars) :: var0
     REAL*8, DIMENSION(11,np) :: database
-    INTEGER*4 :: itest, i, j
-    
+    INTEGER*4 :: itest, i, j    
     external funcs
-    save
     
     alamda = - 1
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
@@ -952,26 +898,6 @@ CONTAINS
              refspec (i, j) = database (j + 1, i)
           end do
        end do
-       ! jmax used below for reference spectra calculations. It is the number of
-       ! reference spectra.
-       jmax = (npars - 12) / 4
-       if (smooth) then
-          do i = 1, nsun
-             suntemp (i) = sunspec (i)
-             do j = 1, 10
-                reftemp (i, j) = refspec (i, j)
-             end do
-          end do
-          do i = 3, npoints - 2
-             sunspec (i) = 0.375d0 * suntemp (i) + 0.25d0 * (suntemp (i + 1) + &
-                  suntemp (i - 1)) + 0.0625d0 * (suntemp (i + 2) + suntemp (i - 2))
-             do j = 1, 10
-                refspec (i, j) = 0.375d0 * reftemp (i, j) + 0.25d0 * &
-                     (reftemp (i + 1, j) + reftemp (i - 1, j)) + 0.0625d0 * &
-                     (reftemp (i + 2, j) + reftemp (i - 2, j))
-             end do
-          end do
-       end if ! on smoothing.
        return ! ntype = 3, database loaded.
     end if ! on ntype.
     
@@ -1232,11 +1158,7 @@ INTEGER*4 :: i
 save
 
 ! Summarizes the inputs for later reference.
-if (doas) then
-  write (22, '(1x, t2, a)') 'DOAS fitting'
-else
-  write (22, '(1x, t2, a)') 'BOAS fitting'
-end if
+write (22, '(1x, t2, a)') 'BOAS fitting'
 write (22, '(1x, t2, a, t33, i3, t36, a)') 'maximum number of parameters =', &
   mmax, '.'
 write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') npars, &
@@ -1278,7 +1200,6 @@ write (22, *) 'times the differentiation parameter for each variable.'
 write (22, *) ' renorm = ', renorm
 write (22, *) ' update_pars = ', update_pars
 write (22, *) ' wrt_scr = ', wrt_scr
-write (22, *) ' smooth = ', smooth
 write (22, '(a, f7.2)') '  szamax =', szamax
 write (22, '(a, f7.2)') '  szamin =', szamin
 write (22, '(a, I3)') '  cldmax =', cldmax
@@ -1989,133 +1910,6 @@ close (unit = 18)
 return
 end subroutine dataspline
 !
-subroutine subtract_cubic (pos, npoints, database, ll_rad, lu_rad)
-
-! "High-pass filtering" for reference spectra, as required for DOAS.
-
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 7000)
-dimension pos (maxpts), database (11, maxpts), temp (maxpts), ptemp (maxpts)
-dimension par (4), covar (4, 4), lista (4)
-save
-
-! Remember order of parameters (to satisfy lfit).
-do i = 1, 4
-  lista (i) = i
-end do
-
-! Find limits for polynomial fitting, with ~1 nm overlap.
-do i = 1, npoints
-  if (pos (i) .ge. pos (ll_rad) - 1.d0) then
-    nlower = i
-!   write (*, *) 'subtract_cubic lower:', i, pos (i), pos (ll_rad) - 1.
-    go to 10
-  end if
-end do
-10 continue
-do i = nlower + 1, npoints
-  if (pos (i) .gt. pos (lu_rad) + 1.d0) then
-    nupper = i - 1
-!   write (*, *) 'subtract_cubic upper:', i - 1, pos (i - 1), pos (lu_rad) + 1.
-    go to 20
-  end if
-end do
-20 continue
-nfitted = nupper - nlower + 1
-
-! Find average position over fitted region.
-avg = 0.d0
-do i = 1, nfitted
-  avg = avg + pos (i + nlower - 1)
-end do
-avg = avg / nfitted
-
-! Load temporary position file. Re-define positions in order to fit about mean
-! position.
-do i = 1, nfitted
-  ptemp (i) = pos (i + nlower - 1) - avg
-end do
-
-! Load and fit database spectra nos. 2-11.
-do i = 2, 11
-  do j = 1, nfitted
-    temp (j) = database (i, j + nlower - 1)
-  end do
-  call lfit (ptemp, temp, nfitted, par, lista, covar, chisq)
-! Re-load database with high-pass filtered data, over whole spectral region.
-  do j = 1, npoints
-    x = pos (j) - avg
-    database (i, j) = database (i, j) - (par (1) + par (2) * x + par (3) * &
-    x**2 + par (4) * x**3)
-  end do
-end do
-
-return
-end subroutine subtract_cubic
-!
-subroutine subtract_cubic_meas (pos, npoints, spec, ll_rad, lu_rad)
-
-! "High-pass filtering" for atmospheric spectra, as required for DOAS.
-
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 7000)
-dimension pos (maxpts), spec (maxpts), temp (maxpts), ptemp (maxpts)
-dimension par (4), covar (4, 4), lista (4)
-save
-
-! Remember order of parameters (to satisfy lfit).
-do i = 1, 4
-  lista (i) = i
-end do
-
-! Find limits for polynomial fitting, with ~1 nm overlap.
-do i = 1, npoints
-  if (pos (i) .ge. pos (ll_rad) - 1.d0) then
-    nlower = i
-!   write (*, *) ' subtract_cubic_meas lower:', i, pos (i), pos (ll_rad) - 1.
-    go to 10
-  end if
-end do
-10 continue
-do i = nlower + 1, npoints
-  if (pos (i) .gt. pos (lu_rad) + 1.d0) then
-    nupper = i - 1
-!   write (*, *) ' subtract_cubic_meas upper:', i - 1, pos (i - 1), &
-!     pos (lu_rad) + 1.
-    go to 20
-  end if
-end do
-20 continue
-nfitted = nupper - nlower + 1
-
-! Find average position over fitted region.
-avg = 0.d0
-do i = 1, nfitted
-  avg = avg + pos (i + nlower - 1)
-end do
-avg = avg / nfitted
-
-! Load temporary position file. Re-define positions in order to fit about mean
-! position.
-do i = 1, nfitted
-  ptemp (i) = pos (i + nlower - 1) - avg
-end do
-
-! Load and fit spectrum
-do i = 1, nfitted
-  temp (i) = spec (i + nlower - 1)
-end do
-call lfit (ptemp, temp, nfitted, par, lista, covar, chisq)
-! Re-load spec with high-pass filtered data, over whole spectral region.
-do i = 1, npoints
-  x = pos (i) - avg
-  spec (i) = spec (i) - (par (1) + par (2) * x + par (3) * x**2 + par (4) * &
-  x**3)
-end do
-
-return
-end subroutine subtract_cubic_meas
-!
 subroutine lfit (x, y, ndata, a, lista, covar, chisq)
 
 ! Linear least-squares fitting, from Numerical Recipes.
@@ -2326,7 +2120,7 @@ END MODULE GASFIT_MODULE
 SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvaried, &
      avg, diff, ntype, database)
 
-  USE gasfit_module, ONLY: spectrum, smooth, wrt_scr, doas
+  USE gasfit_module, ONLY: spectrum
 
   ! Calculates the spectrum and its derivatives for mrqcof.
   IMPLICIT NONE
