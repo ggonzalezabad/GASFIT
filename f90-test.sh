@@ -7,7 +7,7 @@ gasfit_ace_io.inp
 gasfit_ace_io_output.txt
 ace_zn_vis_2017_01_16_gasbeta.txt
 test_spectrum_output.txt
-OMSAO_KNMI_SolarSpec_OMI-range_gas_beta.dat
+sao2010_solref_air_380_480.dat
 sao2010.solref.bro
 newkpno_afgl.ring.bro
   1.d12, f, 1.d0
