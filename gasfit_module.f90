@@ -45,7 +45,7 @@ MODULE GASFIT_MODULE
 
 ! Variables for fit. To be allocated depending on the number of
   ! spectral pixels and parameters before each call to specfit
-  REAL*8, ALLOCATABLE, DIMENSION(:,:) :: correl, covar, alpha
+  REAL*8, ALLOCATABLE, DIMENSION(:,:) :: correl, covar
   INTEGER*4 :: iteration
   REAL*8 :: rms, chisq
 
@@ -207,8 +207,6 @@ CONTAINS
     do i = 1, n_solar_pars
        read (21, *) j, var_sun(i), if_var_sun(i), diffsun(i), &
             sun_par_str(i), var_sun_factor(i), sun_par_names(i)
-       print*, j, var_sun(i), if_var_sun(i), diffsun(i),&
-            sun_par_str(i), var_sun_factor(i), trim(sun_par_names(i))
     end do
     
     ! Use strings to assign specific fitting parameter indices
@@ -225,9 +223,9 @@ CONTAINS
     if (autodiff) then
        do i = 1, n_solar_pars
           if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
-       end do
+       end do 
     end if
-    
+
     ! Order the parameters for mrqmin (housekeeping for the fitting process) and
     ! save the initial values of the parameters, in case they are required at some
     ! later stage. At present, just used in writing the fitting output file.
@@ -239,11 +237,7 @@ CONTAINS
           list_sun (nvar_sun) = i
        end if
     end do
-    
-    if (nvar_sun .gt. mmax) then
-       write (22, *) ' maximum number of solar parameters exceeded.'
-       go to 1000
-    end if
+
     if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
     
     ! Read radiance fitting parameters:
@@ -385,23 +379,22 @@ CONTAINS
     iprovar = .false.
     if (iterate_sun) then
        ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-            alpha(1:n_solar_pars,1:n_solar_pars),fit(1:npoints))
+            fit(1:npoints))
+       correl = 0.0d0; covar=0.0d0; fit=0.0d0
        call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
             avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
             fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
             var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
             iprovar, 1, database)
-       DEALLOCATE(correl, covar, fit)
-       print*, iprovar
-       stop
+
        ! Shift and squeeze solar spectrum.
        do i = 1, npoints
-          pos_sun (i) = (pos_sun (i) - var_sun (11)) / (1.d0 + var_sun (12))
+          pos_sun (i) = (pos_sun (i) - var_sun (nshi)) / (1.d0 + var_sun (nsqe))
        end do
        dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
             float (npoints - nvar_sun))
        write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
-       write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (11), dshift
+       write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
        write (*, *) 'nvar_sun = ', nvar_sun
        
        ! Freeze variation of slit width for radiance fitting is not currently
@@ -410,16 +403,20 @@ CONTAINS
        
        ! Set width for later use in undersampling correction. hw1e means the gaussian
        ! half-width at 1/e of the maximum intensity.
-       hw1e = var_sun (10)
+       hw1e = var_sun (nhwe)
        dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
             float (npoints - nvar_sun))
        write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
-       
+
+       DEALLOCATE(correl, covar, fit)       
        DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
             var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
             sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
             sun_par_str, var_sun_factor)
-       stop
+    end if ! on iterate_sun
+    write (*, *) 'finished with iterate_sun'
+
+    stop
 
        ! Initialize several diagnostics.
        ! rmsavg: average fitting rms.
@@ -562,8 +559,6 @@ CONTAINS
 !!$          pos (i) = (pos (i) - shift) / squeeze
 !!$       end do
 !!$       ! else (later) calculate sun and radiance spectrum
-    end if ! on iterate_sun
-!!$    write (*, *) 'finished with iterate_sun'
 !!$    
 !!$    ! Calculate the undersampled spectrum.
 !!$    call undersample (pos, npoints, underspec, hw1e, phase, wrt_scr)
@@ -789,11 +784,10 @@ CONTAINS
     INTEGER*4, INTENT(INOUT), DIMENSION(1:npars) :: lista
 
     ! Local variables
-    REAL*8 :: alamda, ochisq
-    REAL*8, DIMENSION(1:npars,1:npars) :: alpha
+    REAL*8 :: alamda, ochisq, difftest, prop, rsum
     REAL*8, DIMENSION(1:npars) :: var0
     REAL*8, DIMENSION(11,np) :: database
-    INTEGER*4 :: itest, i
+    INTEGER*4 :: itest, i, j
     
     external funcs
     save
@@ -804,74 +798,81 @@ CONTAINS
          funcs, alamda, avg, diff(1:npars), ntype, database)
     iteration = 1
     itest = 0
-    if (wrt_scr) then
+1   if (wrt_scr) then
        write (22,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
             iteration, 'chi-squared: ', chisq, 'alamda:', alamda
        write (22,'(1x, a)') 'variables:'
-       write (22,'(1x, 1p6e13.4)') (var (lista (i)), i = 1, nvaried)
+       do i = 1, npars
+          write (22,'(A3,3x, E10.2)') str(i), var(i)
+       end do
        write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
             iteration, 'chi-squared: ', chisq, 'alamda:', alamda
        write (*,'(1x, a)') 'variables:'
-       write (*,'(1x, 1p6e12.4)') (var (lista (i)), i = 1, nvaried)
+       do i = 1, npars
+          write (*,'(A3,3x, E10.2)') str(i), var(i)
+       end do
+    end if
+
+    iteration = iteration + 1
+    ochisq = chisq
+    do i = 1, nvaried
+       var0 (lista (i)) = var (lista (i))
+    end do
+    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
+         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
+         funcs, alamda, avg, diff(1:npars), ntype, database)
+    
+    do i = 1, nvaried
+       prop = abs (var0 (lista (i)) - var (lista (i)))
+       difftest = provar * diff (lista (i))
+       if (prop .gt. difftest) then
+          go to 2
+       end if
+    end do
+    
+    iprovar = .true.
+    if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
+    go to 3
+2   if (chisq .gt. ochisq) then
+       itest = 0
+    else if (abs (ochisq - chisq) .lt. delchi) then
+       itest = itest + 1
+    end if
+    if (itest .lt. 2) then
+       go to 1
+    end if
+3   alamda = 0.0
+    
+    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
+         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
+         funcs, alamda, avg, diff(1:npars), ntype, database)
+    if (wrt_scr) then
+       write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
+            iteration, 'chi-squared:', chisq, 'alamda:', alamda
+       write (*,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
+            iteration, 'chi-squared:', chisq, 'alamda:', alamda
     end if
     
-!!$    iteration = iteration + 1
-!!$    ochisq = chisq
-!!$    do i = 1, nvaried
-!!$       var0 (lista (i)) = var (lista (i))
-!!$    end do
-!!$    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
-!!$         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-!!$         funcs, alamda, avg, diff(1:npars), ntype, database)
-!!$    do i = 1, nvaried
-!!$       prop = abs (var0 (lista (i)) - var (lista (i)))
-!!$       difftest = provar * diff (lista (i))
-!!$       if (prop .gt. difftest) then
-!!$          go to 2
-!!$       end if
-!!$    end do
-!!$    iprovar = .true.
-!!$    if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
-!!$    go to 3
-!!$2   if (chisq .gt. ochisq) then
-!!$       itest = 0
-!!$    else if (abs (ochisq - chisq) .lt. delchi) then
-!!$       itest = itest + 1
-!!$    end if
-!!$    if (itest .lt. 2) then
-!!$       go to 1
-!!$    end if
-!!$3   alamda = 0.0
-!!$    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, &
-!!$         var(1:npars), npars, lista(1:npars), nvaried, covar(1:npars,1:npars), &
-!!$         alpha(1:npars,1:npars), chisq, funcs, alamda, delchi, smooth, avg, &
-!!$         diff(1:npars), wrt_scr, ntype, database, doas)
-!!$    if (wrt_scr) then
-!!$       write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-!!$            iteration, 'chi-squared:', chisq, 'alamda:', alamda
-!!$       write (*,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-!!$            iteration, 'chi-squared:', chisq, 'alamda:', alamda
-!!$    end if
-!!$    
-!!$    ! Calculate the correlation matrix.
-!!$    do i = 1, nvaried
-!!$       correl (i, i) = 1.
-!!$       do j = 1, i
-!!$          if (i .ne. j) correl (i, j) = covar (i, j) / sqrt (covar (i, i) * &
-!!$               covar (j, j))
-!!$       end do
-!!$    end do
-!!$    
-!!$    ! Calculate the final spectrum.
-!!$    call spectrum (np, npars, avg, pos(1:np), fit_spec(1:np), var(1:npars), ntype, database)
-!!$    
-!!$    ! Calculate the rms of the fit.
-!!$    rsum = 0.
-!!$    do i = 1, np
-!!$       rsum = rsum + ((fit_spec (i) - spec (i)) / sig (i))**2
-!!$    end do
-!!$    rms = sqrt (rsum / np)
+    ! Calculate the correlation matrix.
+    do i = 1, nvaried
+       correl (i, i) = 1.
+       do j = 1, i
+          if (i .ne. j) correl (i, j) = covar (i, j) / sqrt (covar (i, i) * &
+               covar (j, j))
+       end do
+    end do
     
+    ! Calculate the final spectrum.
+    call spectrum (np, npars, avg, pos(1:np), fit_spec(1:np), &
+    var(1:npars), fac(1:npars), str(1:npars), ntype, database)
+    
+    ! Calculate the rms of the fit.
+    rsum = 0.
+    do i = 1, np
+       rsum = rsum + ((fit_spec (i) - spec (i)) / sig (i))**2
+    end do
+    rms = sqrt (rsum / np)
+
     return
   END SUBROUTINE specfit
 
@@ -1034,55 +1035,6 @@ CONTAINS
        IF (str(i) .EQ. bsp_str) baseline(1:npoints) = baseline(1:npoints) + var(i) * del(1:npoints)**fac(i)
     end do
     fit(1:npoints) = fit(1:npoints) + baseline(1:npoints)
-
-!!$    ! Add up the contributions, with solar intensity as var (13), trace species
-!!$    ! beginning at var (13), to include possible linear and Beer's law forms. Do
-!!$    ! these as linear-Beer's-linear. In order to do DOAS I need to be careful to
-!!$    ! include just linear contributions, which I already high-pass filtered.
-!!$    
-!!$    ! DOAS here - the spectrum to be fitted needs to be re-defined.
-!!$    if (doas .and. ntype .eq. 4) then
-!!$       do i = 1, npoints
-!!$          !   For DOAS, var (9) should == 1., and not be varied.
-!!$          fit (i) = var (13) * dlog (sunspec_ss (i))
-!!$          !   Ring adjustment.
-!!$          fit (i) = fit (i) + var (13) * (refspec (i, 1) / sunspec_ss (i))
-!!$          do j = 2, jmax
-!!$             fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
-!!$          end do
-!!$       end do
-!!$    else
-!!$       ! Doing BOAS.
-!!$       do i = 1, npoints
-!!$          fit (i) = var(nalb) * sunspec_ss(i)
-!!$          !   Initial add-on contributions.
-!!$          do j = 1, jmax
-!!$             fit (i) = fit (i) + var (4 * j + 9) * refspec (i, j)
-!!$          end do
-!!$          !   Beer's law contributions.
-!!$          do j = 1, jmax
-!!$             fit (i) = fit (i) * dexp (- var (4 * j + 10) * refspec (i, j))
-!!$          end do
-!!$          !   Final add-on contributions.
-!!$          do j = 1, jmax
-!!$             fit (i) = fit (i) + var (4 * j + 11) * refspec (i, j)
-!!$          end do
-!!$       end do
-!!$    end if
-    
-    ! Add the scaling.
-!!$    do i = 1, npoints
-!!$       del = pos (i) - avg
-!!$       fit (i) = fit (i) * (var (5) + del * var (6) + (del**2) * var (7) + &
-!!$            (del**3) * var (8))
-!!$    end do
-    
-    ! Add baseline parameters.
-!!$    do i = 1, npoints
-!!$       del = pos (i) - avg
-!!$       fit (i) = fit (i) + var (1) + del * var (2) + (del**2) * var (3) + &
-!!$            (del**3) * var (4)
-!!$    end do
     
     return
   end subroutine spectrum
@@ -1107,23 +1059,28 @@ CONTAINS
     
     ! Local variables
     REAL*8 :: ochisq, even
-    REAL*8, DIMENSION(1:ma) :: atry, beta, da
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: atry, da
     REAL*8, DIMENSION(1:ma,1:ma) :: identity, inverse
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: beta
+    REAL*8, ALLOCATABLE, DIMENSION(:,:) :: alpha
     LOGICAL :: first_call = .TRUE.
     INTEGER*4 :: j,k,kk,ihit
     INTEGER*4, DIMENSION(1:mfit) :: index
     
     external funcs
-    save
-    
+    save ochisq,atry,da,beta,first_call,alpha
+
     if (first_call) then
        first_call = .false.
        identity = 0.d0
        do j = 1, ma
           identity (j, j) = 1.d0
        end do
+       ALLOCATE(atry(1:ma),da(1:ma),beta(1:ma),alpha(1:ma,1:ma))
     end if
+
     if (alamda .lt. 0.) then
+       ! Just for security we check that lista has right size
        kk = mfit + 1
        do j = 1, ma
           ihit = 0
@@ -1139,24 +1096,35 @@ CONTAINS
        end do
        if (kk .ne. (ma + 1)) print*, 'improper permutation in lista'
        alamda = 0.001
-       call mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, beta, &
-            avg, diff, ntype, database)
+       ! Initial fit
+       call mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, &
+            beta, avg, diff, ntype, database)
+       ! Save chisq for later use
        ochisq = chisq
+       ! Initialize new fitting parameters
        do j = 1, ma
           atry (j) = a (j)
        end do
     end if
+
+    ! Save covar and beta
     do j = 1, mfit
        do k = 1, mfit
-          covar (j, k) = alpha (j, k)
+          covar(j,k) = alpha(j,k)
        end do
-       covar (j, j) = alpha (j, j) * (1. + alamda)
-       da (j) = beta (j)
+       covar(j,j) = alpha(j,j) * (1.0+alamda)
+       da(j) = beta(j)
     end do
+
+    ! Solve matrix
     call ludcmp (covar, mfit, ma, index, even)
-    call lubksb (covar, mfit, ma, index, da)
-    
+    call lubksb (covar, mfit, ma, index, da)    
+
     if (alamda .eq. 0.) then
+       identity = 0.d0
+       do j = 1, ma
+          identity (j, j) = 1.d0
+       end do
        ! Calculate inverse of curvature matrix to obtain covariance matrix.
        inverse = identity
        do j = 1, mfit
@@ -1165,20 +1133,30 @@ CONTAINS
           !   Luke Valin correction 31mar2014; answers are exactly the same
        end do
        covar = inverse
+       DEALLOCATE(atry,da,beta,alpha)
        return
     end if
+
+    ! Work out new parameters based in da
     do j = 1, mfit
        atry (lista (j)) = a (lista (j)) + da (j)
     end do
+
+    ! Try out new parameters (atry)
     call mrqcof (x, y, sig, ndata, atry, fac, str, ma, lista, mfit, covar, da, &
          avg, diff, ntype, database)
+    
+    ! If the new parameters are more succesful
     if (chisq .lt. ochisq) then
        alamda = 0.1 * alamda
+       ! Save chisq
        ochisq = chisq
        do j = 1, mfit
           do k = 1, mfit
+             ! Save alpha
              alpha (j, k) = covar (j, k)
           end do
+          ! Save beta
           beta (j) = da (j)
           a (lista (j)) = atry (lista (j))
        end do
@@ -1206,8 +1184,8 @@ CONTAINS
     CHARACTER(3), INTENT(IN), DIMENSION(1:ma) :: str
 
     ! Modified variables
-    REAL*8, INTENT(INOUT), DIMENSION(1:ma) :: beta
-    REAL*8, INTENT(INOUT), DIMENSION(1:ma,1:ma) :: alpha
+    REAL*8, INTENT(OUT), DIMENSION(1:ma) :: beta
+    REAL*8, INTENT(OUT), DIMENSION(1:ma,1:ma) :: alpha
     REAL*8, INTENT(INOUT), DIMENSION(11,1:ndata) :: database
 
     ! Local variabes
@@ -1215,7 +1193,7 @@ CONTAINS
     REAL*8, DIMENSION(1:ndata) :: ymod
     REAL*8 :: sig2i, dy, wt
     INTEGER*4 :: j, k, i
-    save
+    external funcs
 
     do j = 1, mfit
        do k = 1, j
@@ -2371,7 +2349,6 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
   REAL*8 :: var0
   REAL*8, DIMENSION(1:npoints) :: dyplus
   REAL*8, DIMENSION(1:npars) :: vars0
-  save  
 
   ! Calculate the spectrum.
   call spectrum (npoints, npars, avg, pos, ymod, vars, fac, str, ntype, database)
@@ -2388,6 +2365,6 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
      end do
      vars0 (lista (i)) = var0
   end do
-
+  
   return
 END SUBROUTINE funcs
