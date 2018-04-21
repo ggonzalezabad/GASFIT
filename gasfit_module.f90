@@ -1457,16 +1457,14 @@ end subroutine gauss_uneven
      do i = 1, np
         klo = 1
         khi = n
-1       if (khi - klo .gt. 1) then
+        do while (khi - klo .gt. 1)
            k = (khi + klo) / 2
            if (xa (k) .gt. x (i)) then
               khi = k
            else
               klo = k
            end if
-           go to 1
-        end if
-        stop
+        end do
         h = xa (khi) - xa (klo)
         if (h .eq. 0.) print*, 'bad xa input.'
         a = (xa (khi) - x (i)) / h
