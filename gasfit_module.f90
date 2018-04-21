@@ -756,10 +756,6 @@ CONTAINS
           end do
           write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
                iteration, 'chi-squared: ', chisq, 'alamda:', alamda
-          write (*,'(1x, a)') 'variables:'
-          do i = 1, npars
-             write (*,'(A3,3x, E10.2)') str(i), var(i)
-          end do
        end if
       
        iteration = iteration + 1
@@ -779,7 +775,7 @@ CONTAINS
           if (prop .gt. difftest) then
              if (chisq .gt. ochisq) itest = 0
              if (abs(ochisq - chisq) .lt. delchi) itest = itest + 1
-             if (itest .lt. 2) cycle iter_loop !go to 2
+             if (itest .lt. 1) cycle iter_loop !go to 2
              iprovar = .true.
              exit iter_loop
           end if
@@ -794,9 +790,13 @@ CONTAINS
          funcs, alamda, avg, diff(1:npars), ntype, database)
     if (wrt_scr) then
        write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-            iteration, 'chi-squared:', chisq, 'alamda:', alamda
+            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
        write (*,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
-            iteration, 'chi-squared:', chisq, 'alamda:', alamda
+            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
+       write (*,'(1x, a)') 'variables:'
+       do i = 1, npars
+          write (*,'(A3,3x, E10.2)') str(i), var(i)
+       end do
     end if
     
     ! Calculate the correlation matrix.
