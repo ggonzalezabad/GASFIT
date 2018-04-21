@@ -739,56 +739,56 @@ CONTAINS
     external funcs
     
     alamda = - 1
+    ! First call to minimization routine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
          fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
          funcs, alamda, avg, diff(1:npars), ntype, database)
     iteration = 1
     itest = 0
-1   if (wrt_scr) then
-       write (22,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
-            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
-       write (22,'(1x, a)') 'variables:'
-       do i = 1, npars
-          write (22,'(A3,3x, E10.2)') str(i), var(i)
-       end do
-       write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
-            iteration, 'chi-squared: ', chisq, 'alamda:', alamda
-       write (*,'(1x, a)') 'variables:'
-       do i = 1, npars
-          write (*,'(A3,3x, E10.2)') str(i), var(i)
-       end do
-    end if
 
-    iteration = iteration + 1
-    ochisq = chisq
-    do i = 1, nvaried
-       var0 (lista (i)) = var (lista (i))
-    end do
-    call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
-         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-         funcs, alamda, avg, diff(1:npars), ntype, database)
-    
-    do i = 1, nvaried
-       prop = abs (var0 (lista (i)) - var (lista (i)))
-       difftest = provar * diff (lista (i))
-       if (prop .gt. difftest) then
-          go to 2
+    iter_loop: DO
+       if (wrt_scr) then
+          write (22,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
+               iteration, 'chi-squared: ', chisq, 'alamda:', alamda
+          write (22,'(1x, a)') 'variables:'
+          do i = 1, npars
+             write (22,'(A3,3x, E10.2)') str(i), var(i)
+          end do
+          write (*,'(/1x, a, i2, t18, a, 1pe10.4, t44, a, e9.2)') 'iteration #', &
+               iteration, 'chi-squared: ', chisq, 'alamda:', alamda
+          write (*,'(1x, a)') 'variables:'
+          do i = 1, npars
+             write (*,'(A3,3x, E10.2)') str(i), var(i)
+          end do
        end if
-    end do
-    
-    iprovar = .true.
+      
+       iteration = iteration + 1
+       ochisq = chisq
+       do i = 1, nvaried
+          var0 (lista (i)) = var (lista (i))
+       end do
+       ! Iteration over the minimization
+       call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
+            fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
+            funcs, alamda, avg, diff(1:npars), ntype, database)
+
+       do i = 1, nvaried
+          prop = abs (var0 (lista (i)) - var (lista (i)))
+          difftest = provar * diff (lista (i))
+          ! Check iteration conditions to finish loop
+          if (prop .gt. difftest) then
+             if (chisq .gt. ochisq) itest = 0
+             if (abs(ochisq - chisq) .lt. delchi) itest = itest + 1
+             if (itest .lt. 2) cycle iter_loop !go to 2
+             iprovar = .true.
+             exit iter_loop
+          end if
+       end do
+    END DO iter_loop
+
     if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
-    go to 3
-2   if (chisq .gt. ochisq) then
-       itest = 0
-    else if (abs (ochisq - chisq) .lt. delchi) then
-       itest = itest + 1
-    end if
-    if (itest .lt. 2) then
-       go to 1
-    end if
-3   alamda = 0.0
-    
+    alamda = 0.0    
+    ! Final call to minimization subroutine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
          fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
          funcs, alamda, avg, diff(1:npars), ntype, database)
@@ -861,8 +861,8 @@ CONTAINS
     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2sun
     CHARACTER*120 :: kpnospec
     LOGICAL :: first_sun=.true.
-    save
-    
+    save nsun
+
     if (ntype .eq. 1) then
        if (first_sun) then
           first_sun = .false.
@@ -900,7 +900,7 @@ CONTAINS
        end do
        return ! ntype = 3, database loaded.
     end if ! on ntype.
-    
+
     ! Calculate the spectrum: First do the shift and squeeze. Shift var (nshi),
     ! squeeze by 1 + var (nsqe); do in absolute sense, to make it easy to back-convert
     ! radiance data.
@@ -964,7 +964,7 @@ CONTAINS
     
     return
   end subroutine spectrum
-  !
+  
   subroutine mrqmin (x, y, sig, ndata, a, fac, str, ma, lista, mfit, &
        funcs, alamda, avg, diff, ntype, database)
     
