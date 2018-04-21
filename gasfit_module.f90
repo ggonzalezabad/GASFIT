@@ -1399,9 +1399,8 @@ end do
 
 return
 end subroutine gauss_uneven
-!
-   subroutine spline(x, y, n, y2)
 
+   subroutine spline(x, y, n, y2)
      ! Cubic spline derivative calculation from Numerical Recipes. Modified to always
      ! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
      IMPLICIT NONE
@@ -1435,43 +1434,50 @@ end subroutine gauss_uneven
         y2 (k) = y2 (k) * y2 (k + 1) + u (k)
      end do
 
-return
-end subroutine spline
-!
-subroutine splint (xa, ya, y2a, n, np, x, y)
+     return
+   end subroutine spline
 
-! Cubic spline interpolation from Numerical Recipes, using results of
-! subroutine spline.
+   subroutine splint (xa, ya, y2a, n, np, x, y)
+     ! Cubic spline interpolation from Numerical Recipes, using results of
+     ! subroutine spline.
 
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 2000)
-dimension x (maxpts), y (maxpts)
-dimension xa (n), ya (n), y2a (n)
-save
+     IMPLICIT NONE
+     ! Input variables
+     INTEGER*4, INTENT(IN) :: n, np
+     REAL*8, INTENT(IN), DIMENSION(1:n) :: xa, ya, y2a
+     REAL*8, INTENT(IN), DIMENSION(1:np) :: x
 
-do i = 1, np
-  klo = 1
-  khi = n
-1 if (khi - klo .gt. 1) then
-    k = (khi + klo) / 2
-    if (xa (k) .gt. x (i)) then
-      khi = k
-    else
-      klo = k
-    end if
-    go to 1
-  end if
-  h = xa (khi) - xa (klo)
-  if (h .eq. 0.) print*, 'bad xa input.'
-  a = (xa (khi) - x (i)) / h
-  b = (x (i) - xa (klo)) / h
-  y (i) = a * ya (klo) + b * ya (khi) + ((a**3 - a) * y2a (klo) + (b**3 - b) * &
-    y2a (khi)) * (h**2) / 6.
-end do
+     ! Ouput variables
+     REAL*8, INTENT(OUT), DIMENSION(1:np) :: y
 
-return
-end subroutine splint
-!
+     ! Local variables
+     INTEGER*4 :: i, k, klo, khi
+     REAL*8 :: h, a, b
+
+     do i = 1, np
+        klo = 1
+        khi = n
+1       if (khi - klo .gt. 1) then
+           k = (khi + klo) / 2
+           if (xa (k) .gt. x (i)) then
+              khi = k
+           else
+              klo = k
+           end if
+           go to 1
+        end if
+        stop
+        h = xa (khi) - xa (klo)
+        if (h .eq. 0.) print*, 'bad xa input.'
+        a = (xa (khi) - x (i)) / h
+        b = (x (i) - xa (klo)) / h
+        y (i) = a * ya (klo) + b * ya (khi) + ((a**3 - a) * y2a (klo) + (b**3 - b) * &
+             y2a (khi)) * (h**2) / 6.
+     end do
+     
+     return
+   end subroutine splint
+
 subroutine undersample (wav, nwav, underspec, hw1e, fraction, wrt_scr)
 
 ! Convolves input spectrum with Gaussian slit function of specified HW1e (half-
