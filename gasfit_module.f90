@@ -1400,32 +1400,40 @@ end do
 return
 end subroutine gauss_uneven
 !
-subroutine spline(x, y, n, y2)
+   subroutine spline(x, y, n, y2)
 
-! Cubic spline derivative calculation from Numerical Recipes. Modified to always
-! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
+     ! Cubic spline derivative calculation from Numerical Recipes. Modified to always
+     ! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
+     IMPLICIT NONE
 
-implicit real*8 (a - h, o - z)
-parameter (maxkpno = 100000)
-dimension x (n), y (n), y2 (n), u (maxkpno)
-save
+     ! Input variables
+     INTEGER*4, INTENT(IN) :: n
+     REAL*8, INTENT(IN), DIMENSION(1:n) :: x, y
 
-y2 (1) = 0.
-u (1) = 0.
-do i = 2, n - 1
-  sig = (x (i) - x (i - 1)) / (x (i + 1) - x (i - 1))
-  p = sig * y2 (i - 1) + 2.
-  y2 (i) = (sig - 1.) / p
-  u (i) = (6. * ((y (i + 1) - y (i)) / (x (i + 1) - x (i)) - (y (i) - &
-    y (i - 1)) / (x (i) - x (i - 1))) / (x (i + 1) - x (i - 1)) - sig * &
-    u (i - 1)) / p
-end do
-qn = 0.
-un = 0.
-y2 (n) = (un - qn * u (n - 1)) / (qn * y2 (n - 1) + 1.)
-do k = n - 1, 1, -1
-  y2 (k) = y2 (k) * y2 (k + 1) + u (k)
-end do
+     ! Output variables
+     REAL*8, INTENT(INOUT), DIMENSION(1:n) :: y2
+
+     ! Local variables
+     REAL*8, DIMENSION(1:n) :: u
+     REAL*8 :: sig, p, qn, un
+     INTEGER*4 :: i, k
+     
+     y2 (1) = 0.
+     u (1) = 0.
+     do i = 2, n - 1
+        sig = (x (i) - x (i - 1)) / (x (i + 1) - x (i - 1))
+        p = sig * y2 (i - 1) + 2.
+        y2 (i) = (sig - 1.) / p
+        u (i) = (6. * ((y (i + 1) - y (i)) / (x (i + 1) - x (i)) - (y (i) - &
+             y (i - 1)) / (x (i) - x (i - 1))) / (x (i + 1) - x (i - 1)) - sig * &
+             u (i - 1)) / p
+     end do
+     qn = 0.
+     un = 0.
+     y2 (n) = (un - qn * u (n - 1)) / (qn * y2 (n - 1) + 1.)
+     do k = n - 1, 1, -1
+        y2 (k) = y2 (k) * y2 (k + 1) + u (k)
+     end do
 
 return
 end subroutine spline
