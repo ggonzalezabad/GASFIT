@@ -83,8 +83,8 @@ CONTAINS
     REAL*8, DIMENSION(11,maxpts) :: database
     REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
     REAL*8 :: asum, avg, &
-         davg,  dgas, dhw1e, drelavg, dshift, dshiftavg, &
-         dshiftrad, gas, hw1e, remult, rmsavg, &
+         davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
+         dshiftrad, gas, hw1e, shap, asym, remult, rmsavg, &
          shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
          j, nfirst, ngas, nrads
@@ -390,70 +390,76 @@ CONTAINS
        write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
        write (*, *) 'nvar_sun = ', nvar_sun
               
-       ! Set width for later use in undersampling correction. hw1e means the gaussian
-       ! half-width at 1/e of the maximum intensity.
-       hw1e = var_sun (nhwe)
+       ! Set slit function parameters for later use in undersampling correction. 
+       ! HW1E means the gaussian half-width at 1/e of the maximum intensity.
+       hw1e = var_sun(nhwe); shap = var_sun(nsha); asym = var_sun(nasy)
        dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
             float (npoints - nvar_sun))
+       dshap = rms * sqrt (covar (nsha, nsha) * float (npoints) / &
+            float (npoints - nvar_sun))
+       dasym = rms * sqrt (covar (nasy, nasy) * float (npoints) / &
+            float (npoints - nvar_sun))
        write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
+       write (*, '(a, 1p2e14.6)') 'irrad: shape, 1 sigma = ', shap, dshap
+       write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', asym, dasym
 
        ! Deallocate variables needed for fitting
-       DEALLOCATE(correl, covar, fit)       
+       DEALLOCATE(correl, covar, fit)  
 
     end if ! on iterate_sun
     write (*, *) 'finished with iterate_sun'
+
+    ! Initialize several diagnostics.
+    ! rmsavg: average fitting rms.
+    ! davg: average fitting uncertainty for reported parameter.
+    ! drelavg: average relative fitting uncertainty for reported parameter.
+    ! dshiftavg:  average fitting uncertainty for spectral shift parameter.
+    ! nfirst is the number among fitted radiances corresponding to the ground pixel
+    ! nfirstfit.
+    rmsavg = 0.d0
+    davg = 0.d0
+    drelavg = 0.d0
+    dshiftavg = 0.d0
+    nfirst = 0
 
     ! Deallocate variables
     DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
          var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
          sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
          sun_par_str, var_sun_factor)
-    
-    stop
 
-       ! Initialize several diagnostics.
-       ! rmsavg: average fitting rms.
-       ! davg: average fitting uncertainty for reported parameter.
-       ! drelavg: average relative fitting uncertainty for reported parameter.
-       ! dshiftavg:  average fitting uncertainty for spectral shift parameter.
-       ! nfirst is the number among fitted radiances corresponding to the ground pixel
-       ! nfirstfit.
-!!$       rmsavg = 0.d0
-!!$       davg = 0.d0
-!!$       drelavg = 0.d0
-!!$       dshiftavg = 0.d0
-!!$       nfirst = 0
-!!$       
-!!$       
-!!$       ! Read the measured spectra.
-!!$       !
-!!$       ! ipix: The number of the radiance, counting consecutively along the orbit.
-!!$       !
-!!$       ! iyear (Year data was collected), imonth (Month data was collected), iday 
-!!$       ! (Day data was collected), ihour (Hour data wav collected), imin 
-!!$       ! (Minuted data was collected) and isec (Second data was collected)
-!!$       !
-!!$       ! ilat (Latitude data was collected), ilon
-!!$       ! 1 is normally selected when we extract data from a GOME el1 file. Because of
-!!$       ! longer integration times when the light conditions are low, sometimes our
-!!$       ! selected band has not been read out, and we need to skip over these ground
-!!$       ! pixels.
-!!$       !
-!!$       ! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
-!!$       !
-!!$       ! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
-!!$       ! east/west edges and center of ground pixel.
-!!$       !
-!!$       ! zs, re: Satellite height and earth radius for each ground pixel measurement.
-!!$       !
-!!$       ! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
-!!$       ! longitudes for 4 corners and center of ground pixel.
-!!$       !
-!!$       i = 1
-!!$40     READ (23, *, end = 50) ipix, icld
-!!$       READ (23, *) iyear, imonth, iday, ihour, imin, isec
-!!$       READ (23, *) ilat, ilon
-!!$       READ (23, *) isza, isaa, ivza, ivaa
+    ! Build up database of reference cross sections
+    stop
+       
+    ! Read the measured spectra.
+    !
+    ! ipix: The number of the radiance, counting consecutively along the orbit.
+    !
+    ! iyear (Year data was collected), imonth (Month data was collected), iday 
+    ! (Day data was collected), ihour (Hour data wav collected), imin 
+    ! (Minuted data was collected) and isec (Second data was collected)
+    !
+    ! ilat (Latitude data was collected), ilon
+    ! 1 is normally selected when we extract data from a GOME el1 file. Because of
+    ! longer integration times when the light conditions are low, sometimes our
+    ! selected band has not been read out, and we need to skip over these ground
+    ! pixels.
+    !
+    ! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
+    !
+    ! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
+    ! east/west edges and center of ground pixel.
+    !
+    ! zs, re: Satellite height and earth radius for each ground pixel measurement.
+    !
+    ! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
+    ! longitudes for 4 corners and center of ground pixel.
+    !
+    i = 1
+!!$40  READ (23, *, end = 50) ipix, icld
+!!$    READ (23, *) iyear, imonth, iday, ihour, imin, isec
+!!$    READ (23, *) ilat, ilon
+!!$    READ (23, *) isza, isaa, ivza, ivaa
 !!$       
 !!$       ! Decide whether to process. If so, update the appropriate arrays and the
 !!$       ! counter for radiances being fitted.
@@ -988,7 +994,7 @@ CONTAINS
     REAL*8, ALLOCATABLE, DIMENSION(:) :: atry, da
     REAL*8, DIMENSION(1:ma,1:ma) :: identity, inverse
     REAL*8, ALLOCATABLE, DIMENSION(:) :: beta
-    REAL*8, ALLOCATABLE, DIMENSION(:,:) :: alpha
+    REAL*8, ALLOCATABLE, DIMENSION(:,:) :: alpha, covar0
     LOGICAL :: first_call = .TRUE.
     INTEGER*4 :: j,k,kk,ihit
     INTEGER*4, DIMENSION(1:mfit) :: index
@@ -998,10 +1004,6 @@ CONTAINS
 
     if (first_call) then
        first_call = .false.
-       identity = 0.d0
-       do j = 1, ma
-          identity (j, j) = 1.d0
-       end do
        ALLOCATE(atry(1:ma),da(1:ma),beta(1:ma),alpha(1:ma,1:ma))
     end if
 
@@ -1058,9 +1060,17 @@ CONTAINS
           call lubksb (covar, mfit, ma, index, inverse (:, j))
           !   Luke Valin correction 31mar2014; answers are exactly the same
        end do
-       covar = inverse
-       DEALLOCATE(atry,da,beta,alpha)
-       return
+       ALLOCATE(covar0(1:ma,1:ma))
+       covar0 = inverse
+       covar  = identity
+       do j = 1, mfit
+          do k = 1, mfit
+             ! Save covar
+             covar (lista(j), lista(k)) = covar0(j,k)
+          end do
+       end do
+       DEALLOCATE(atry,da,beta,alpha,covar0)
+       return       
     end if
 
     ! Work out new parameters based in da
