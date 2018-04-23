@@ -14,6 +14,7 @@ MODULE GASFIT_MODULE
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
+  INTEGER*4 :: nkppos
 
 ! Solar fitting control & variables (read or derived from input control file)
   CHARACTER(256) :: solar_line
@@ -79,7 +80,7 @@ CONTAINS
     REAL*8, ALLOCATABLE, DIMENSION(:) :: fit
     REAL*8, DIMENSION(maxpts) :: spline_sun, &
          deriv2sun, pos, spec, sig, temp, residual
-    REAL*8, DIMENSION(2,maxpts) :: underspec
+    REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
     REAL*8, DIMENSION(11,maxpts) :: database
     REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
     REAL*8 :: asum, avg, &
@@ -400,14 +401,38 @@ CONTAINS
        dasym = rms * sqrt (covar (nasy, nasy) * float (npoints) / &
             float (npoints - nvar_sun))
        write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
-       write (*, '(a, 1p2e14.6)') 'irrad: shape, 1 sigma = ', shap, dshap
-       write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', asym, dasym
+       write (*, '(a, 1p2e14.6)') 'irrad: shap, 1 sigma = ', shap, dshap
+       write (*, '(a, 1p2e14.6)') 'irrad: asym, 1 sigma = ', asym, dasym
 
        ! Deallocate variables needed for fitting
        DEALLOCATE(correl, covar, fit)  
 
     end if ! on iterate_sun
     write (*, *) 'finished with iterate_sun'
+
+    ! Finish building database of reference spectra
+    ! Calculate the undersampled spectrum.
+    ALLOCATE(underspec(1:2,1:npoints))
+    call undersample (pos_sun(1:npoints), npoints, underspec, phase)
+    
+!!$    ! Calculate the splined fitting database. Note that the undersampled
+!!$    ! spectrum has just been done. Finish filling in reference database array.
+!!$    call dataspline (pos, npoints, database, wrt_scr)
+!!$    
+!!$    ! Spline irradiance spectrum onto radiance grid.
+!!$    call spline (pos_sun, spec_sun, npoints, deriv2sun)
+!!$    call splint (pos_sun, spec_sun, deriv2sun, npoints, npoints, pos, spline_sun)
+!!$    do i = 1, npoints
+!!$       database (1, i) = spline_sun (i)
+!!$       database (9, i) = underspec (1, i)
+!!$       database (10, i) = underspec (2, i)
+!!$    end do
+    do i =1, npoints
+       write(13,*) pos_sun(i), underspec(1:2,i)
+    end do
+    
+    DEALLOCATE(underspec)
+    stop
 
     ! Initialize several diagnostics.
     ! rmsavg: average fitting rms.
@@ -857,7 +882,7 @@ CONTAINS
     CHARACTER(3), PARAMETER :: ad1_str='ad1', ad2_str='ad2', ble_str='ble', &
          scp_str='Scp', bsp_str='Bsp'
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
-    INTEGER*4 :: i, nsun, jmax, j
+    INTEGER*4 :: i, jmax, j
     REAL*8 :: hw, sh, as, sun_avg
     REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline
     REAL*8 :: sunpos(1:maxpts), refspec(1:maxpts,1:10)
@@ -867,7 +892,6 @@ CONTAINS
     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2sun
     CHARACTER*120 :: kpnospec
     LOGICAL :: first_sun=.true.
-    save nsun
 
     if (ntype .eq. 1) then
        if (first_sun) then
@@ -877,27 +901,27 @@ CONTAINS
           if (wrt_scr) write (*, '(5x,a)') '... from file '//TRIM(kpnospec)
           ! Get total number of points in the spectrum file (so we can allocated space for them)
           open (unit = 25, file = kpnospec, status='old')
-          nsun=0
+          nkppos=0
           do
              read(25,*,END=11)
-             nsun=nsun+1
+             nkppos=nkppos+1
           end do
 11        rewind(unit=25)
           ! Allocate solar variables
-          ALLOCATE(kppos(1:nsun),kpspec(1:nsun),kppos_ss(1:nsun),kpspec_gauss(1:nsun))
+          ALLOCATE(kppos(1:nkppos),kpspec(1:nkppos),kppos_ss(1:nkppos),kpspec_gauss(1:nkppos))
           ! Read solar spectrum
-          do i = 1, nsun     
+          do i = 1, nkppos     
              read (25, *) kppos(i), kpspec(i)
           end do
           ! Normalize solar spectrum
-          sun_avg = SUM(kpspec(1:nsun)) / REAL(nsun,KIND=8)
-          kpspec(1:nsun) = kpspec(1:nsun) / sun_avg
+          sun_avg = SUM(kpspec(1:nkppos)) / REAL(nkppos,KIND=8)
+          kpspec(1:nkppos) = kpspec(1:nkppos) / sun_avg
           close (unit = 25)
        end if ! on first_sun
     else if (ntype .eq. 3) then
        ! The following kluge keeps me from extra re-writing.
-       nsun = npoints
-       do i = 1, nsun
+       nkppos = npoints
+       do i = 1, nkppos
           sunpos (i) = pos (i)
           sunspec (i) = database (1, i)
           do j = 1, 10
@@ -910,7 +934,7 @@ CONTAINS
     ! Calculate the spectrum: First do the shift and squeeze. Shift var (nshi),
     ! squeeze by 1 + var (nsqe); do in absolute sense, to make it easy to back-convert
     ! radiance data.
-    do i = 1, nsun
+    do i = 1, nkppos
        if (ntype .eq. 1 .or. ntype .eq. 2) then
           kppos_ss (i) = kppos (i) * (1.d0 + var(nsqe)) + var(nshi)
        else
@@ -924,17 +948,17 @@ CONTAINS
        ! Broaden the solar reference by the hw1e value with shape
        ! factor sh and asymmetric factor as.
        hw = var(nhwe); sh = var(nsha); as = var(nasy)
-       call super_gauss (nsun, kppos_ss, kpspec, hw, sh, as, kpspec_gauss)
+       call super_gauss (nkppos, kppos_ss, kpspec, hw, sh, as, kpspec_gauss)
        ! Re-sample the solar reference spectrum to the radiance grid.
-       ALLOCATE(d2sun(1:nsun))
-       call spline (kppos_ss, kpspec_gauss, nsun, d2sun)
-       call splint (kppos_ss, kpspec_gauss, d2sun, nsun, npoints, pos, sunspec_ss)
+       ALLOCATE(d2sun(1:nkppos))
+       call spline (kppos_ss, kpspec_gauss, nkppos, d2sun)
+       call splint (kppos_ss, kpspec_gauss, d2sun, nkppos, npoints, pos, sunspec_ss)
        DEALLOCATE(d2sun)
     else
        ! Re-sample the solar reference spectrum to the radiance grid.
-       ALLOCATE(d2sun(1:nsun))
-       call spline (sunpos_ss, sunspec, nsun, d2sun)
-       call splint (sunpos_ss, sunspec, d2sun, nsun, npoints, pos, sunspec_ss)
+       ALLOCATE(d2sun(1:nkppos))
+       call spline (sunpos_ss, sunspec, nkppos, d2sun)
+       call splint (sunpos_ss, sunspec, d2sun, nkppos, npoints, pos, sunspec_ss)
        DEALLOCATE(d2sun)
     end if
 
@@ -1568,128 +1592,79 @@ end subroutine gauss_uneven
      return
    end subroutine splint
 
-subroutine undersample (wav, nwav, underspec, hw1e, fraction, wrt_scr)
+   subroutine undersample (wav, nw, underspec, fraction)
 
-! Convolves input spectrum with Gaussian slit function of specified HW1e (half-
-! width at 1/e of maximum intensity), and samples at a particular input phase to
-! give the undersampling spectrum, that is, the correction for not Nyquist
-! sampling the spectra (see Applied Optics 44, 1296-1304, 2005 for more detail).
-! This version calculates both phases of the undersampling spectrum, phase1 -
-! i.e., underspec (1, i) - being the more common in radiance spectra. "KPNO"
-! data means the high spectral resolution solar reference spectrum (now, most
-! usually, a portion of the SAO2010 Solar Irradiance Reference Spectrum,
-! available at http://www.cfa.harvard.edu/atmosphere/).
+     ! Convolves input spectrum with Gaussian slit function of specified HW1e (half-
+     ! width at 1/e of maximum intensity), and samples at a particular input phase to
+     ! give the undersampling spectrum, that is, the correction for not Nyquist
+     ! sampling the spectra (see Applied Optics 44, 1296-1304, 2005 for more detail).
+     ! This version calculates both phases of the undersampling spectrum, phase1 -
+     ! i.e., underspec (1, i) - being the more common in radiance spectra. "KPNO"
+     ! data means the high spectral resolution solar reference spectrum (now, most
+     ! usually, a portion of the SAO2010 Solar Irradiance Reference Spectrum,
+     ! available at http://www.cfa.harvard.edu/atmosphere/).
+     IMPLICIT NONE
+     
+     ! Input variables
+     INTEGER*4, INTENT(in) :: nw
+     REAL*8, INTENT(in) :: fraction
+     REAL*8, INTENT(in), DIMENSION(1:nw) :: wav
 
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 7000)
-parameter (maxkpno = 7000)
-character*120 overspec
-logical wrt_scr
-dimension pos (maxkpno), spec (maxkpno), specmod (maxkpno), d2spec (maxkpno)
-dimension slit (maxpts), wav (maxpts), wav2 (maxpts), over (maxpts), &
-  under (maxpts), resample (maxpts), d2res (maxpts), underspec (2, maxpts)
-save
+     ! Output variable
+     REAL*8, INTENT(out), DIMENSION(2,1:nw) :: underspec
 
-if (wrt_scr) write (*, '(a)') 'enter standard solar spectrum file.'
-read (*, '(a)') overspec
-open (unit = 27, file = overspec, status = 'old')
-! read in the KPNO data
-i = 1
-20 read (27, *, end = 30) pos (i), spec (i)
-  spec (i) = spec (i) / 1.d14
-  i = i + 1
-  go to 20
-30 npoints = i - 1
-delpos = pos (2) - pos (1)
-close (unit = 27)
+     ! Local variables
+     INTEGER*4 :: i
+     REAL*8, DIMENSION(1:nw) :: resample, wav2, over, under
+     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2spec, d2res
 
-! Apply slit function convolution. Calculate slit function values out to 0.001
-! times x0 value, normalize so that sum = 1.
-emult = - 1.d0 / (hw1e**2)
+     ! The high resolution spectrum is already in memory (nkppos, kppos, kpspec
+     ! and convolved kpspec_gauss)
+     
+     ! Allocate variables for interpolation
+     ALLOCATE(d2spec(1:nkppos),d2res(1:nw))
 
-slitsum = 1.d0
-slit0 = 1.d0
-do i = 1, maxpts
-  slit (i) = exp (emult * (delpos * i)**2)
-  slitsum = slitsum + 2.d0 * slit (i)
-  if (slit (i) / slit0 .le. 0.001) then
-    nslit = i
-    go to 40
-  end if
-end do
-40 continue
-slit0 = slit0 / slitsum
-do i = 1, nslit
-  slit (i) = slit (i) / slitsum
-end do
+     ! Phase1 calculation: Calculate spline derivatives for KPNO data.
+     call spline (kppos, kpspec_gauss, nkppos, d2spec)
+     ! Calculate solar spectrum at radiance positions
+     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, resample)
+     ! Calculate spline derivatives for resampled data.
+     call spline (wav, resample, nw, d2res)
 
-! Convolve spectrum, reflect at endpoints.
-do i = 1, npoints
-  specmod (i) = slit0 * spec (i)
-  do j = 1, nslit
-    nlo = i - j
-    nhi = i + j
-    if (nlo .lt. 0) nlo = - nlo
-    if (nhi .gt. npoints) nhi = 2 * npoints - nhi
-    specmod (i) = specmod (i) + slit (j) * (spec (nlo) + spec (nhi))
-  end do
-end do
+     ! Calculate solar spectrum at radiance + phase positions, original and
+     ! resampled.
+     wav2 (1) = wav (1)
+     do i = 2, nw
+        wav2 (i) = (1.d0 - fraction) * wav (i - 1) + fraction * wav (i)
+     end do
 
-! Legacy code.
-! do i = 1, npoints
-!   specmod (i) = slit0 * spec (i)
-!   do j = 1, nslit
-!     nlo = i - j
-!     nhi = i + j
-!     if (nlo .lt. 0) nlo = - nlo
-!     if (nhi .gt. npoints) nhi = 2 * npoints - nhi
-!     if (nlo .ne. 0) then
-!       specmod (i) = specmod (i) + slit (j) * (spec (nlo) + spec (nhi))
-!     else
-!       specmod (i) = specmod (i) + slit (j) * spec (nhi)
-!     end if
-!   end do
-! end do
+     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav2, over)
+     call splint (wav, resample, d2res, nw, nw, wav2, under)
+     do i = 1, nw
+        underspec (1, i) = over (i) - under (i)
+        resample (i) = over (i)
+     end do
+     
+     ! Phase2 calculation: Calculate spline derivatives for KPNO data.
+     ! Calculate spline derivatives for resampled data.
+     call spline (wav2, resample, nw, d2res)
+     ! Calculate solar spectrum at radiance positions, original and resampled.
+     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, over)
+     call splint (wav2, resample, d2res, nw, nw, wav, under)
+     ! Calculate undersample spectrum
+     do i = 1, nw
+        underspec (2, i) = over (i) - under (i)
+     end do
+     do i = 1, nw
+        write(13,*) wav(i), underspec(1:2,i)
+     end do
+     
+     ! Deallocate interpolation variables
+     DEALLOCATE(d2spec,d2res)
+     
+     return
+   end subroutine undersample
 
-! Phase1 calculation: Calculate spline derivatives for KPNO data.
-call spline (pos, specmod, npoints, d2spec)
-
-! Calculate solar spectrum at radiance positions
-call splint (pos, specmod, d2spec, npoints, nwav, wav, resample)
-
-! Calculate spline derivatives for resampled data.
-call spline (wav, resample, nwav, d2res)
-
-! Calculate solar spectrum at radiance + phase positions, original and
-! resampled.
-wav2 (1) = wav (1)
-do i = 2, nwav
-  wav2 (i) = (1.d0 - fraction) * wav (i - 1) + fraction * wav (i)
-end do
-call splint (pos, specmod, d2spec, npoints, nwav, wav2, over)
-call splint (wav, resample, d2res, nwav, nwav, wav2, under)
-over (1) = 0.
-do i = 1, nwav
-  underspec (1, i) = over (i) - under (i)
-  resample (i) = over (i)
-end do
-
-! Phase2 calculation: Calculate spline derivatives for KPNO data.
-call spline (pos, specmod, npoints, d2spec)
-
-! Calculate spline derivatives for resampled data.
-call spline (wav2, resample, nwav, d2res)
-
-! Calculate solar spectrum at radiance positions, original and resampled.
-call splint (pos, specmod, d2spec, npoints, nwav, wav, over)
-call splint (wav2, resample, d2res, nwav, nwav, wav, under)
-do i = 1, nwav
-  underspec (2, i) = over (i) - under (i)
-end do
-
-return
-end subroutine undersample
-!
 subroutine dataspline (wav, nwav, database, wrt_scr)
 
 ! Opens reference spectrum files.
