@@ -858,7 +858,7 @@ CONTAINS
          scp_str='Scp', bsp_str='Bsp'
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
     INTEGER*4 :: i, nsun, jmax, j
-    REAL*8 :: hw1e, sun_avg
+    REAL*8 :: hw, sh, as, sun_avg
     REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline
     REAL*8 :: sunpos(1:maxpts), refspec(1:maxpts,1:10)
     REAL*8 :: sunpos_ss(maxpts),sunspec(maxpts)
@@ -921,9 +921,10 @@ CONTAINS
     ! Broadening and re-sampling of solar spectrum.
     if (ntype .eq. 1 .or. ntype .eq. 2) then
        ! Case for wavelength fitting of irradiance and radiance.
-       ! Broaden the solar reference by the hw1e value.
-       hw1e = var(nhwe)
-       call gauss (kppos_ss, kpspec, kpspec_gauss, nsun, hw1e)
+       ! Broaden the solar reference by the hw1e value with shape
+       ! factor sh and asymmetric factor as.
+       hw = var(nhwe); sh = var(nsha); as = var(nasy)
+       call super_gauss (nsun, kppos_ss, kpspec, hw, sh, as, kpspec_gauss)
        ! Re-sample the solar reference spectrum to the radiance grid.
        ALLOCATE(d2sun(1:nsun))
        call spline (kppos_ss, kpspec_gauss, nsun, d2sun)
@@ -1033,6 +1034,7 @@ CONTAINS
        do j = 1, ma
           atry (j) = a (j)
        end do
+
     end if
 
     ! Save covar and beta
@@ -1081,7 +1083,7 @@ CONTAINS
     ! Try out new parameters (atry)
     call mrqcof (x, y, sig, ndata, atry, fac, str, ma, lista, mfit, covar, da, &
          avg, diff, ntype, database)
-    
+
     ! If the new parameters are more succesful
     if (chisq .lt. ochisq) then
        alamda = 0.1 * alamda
@@ -1138,6 +1140,7 @@ CONTAINS
        beta (j) = 0.
     end do
     chisq = 0.
+
     call funcs (x, ndata, a, fac, str, ymod, dyda, ma, lista, mfit, avg, diff, &
          ntype, database)
     do i = 1, ndata
@@ -1157,7 +1160,6 @@ CONTAINS
           alpha (k, j) = alpha (j, k)
        end do
     end do
-    
     return
   end subroutine mrqcof
 
@@ -1303,7 +1305,87 @@ end if
 
 return
 end subroutine write_output
-!
+
+   subroutine super_gauss (np, x, y, hw, sh, as, yc)
+
+     ! Convolves input spectrum with Super Gaussian slit function of specified hw1e, !
+     ! shape factor and asymmetric factor (half-width at 1/e intensity).
+     ! For evenly-spaced spectra!!!
+     IMPLICIT NONE
+     
+     ! Input variables
+     INTEGER*4, INTENT(IN) :: np !Number of points
+     REAL*8, INTENT(IN) :: hw, sh, as !HW1E, SHAPE, ASYM
+     REAL*8, INTENT(IN), DIMENSION(1:np) :: x, y ! Wavelengths, spectrum
+
+     ! Output variables
+     REAL*8, INTENT(OUT), DIMENSION(1:np) :: yc ! Convolved spectrum
+
+     ! Local variables
+     INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
+     INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
+     REAL*8, DIMENSION(1:nslit) :: slit
+     REAL*8, DIMENSION(1:3*np) :: ytemp
+     REAL*8, DIMENSION(1:np) :: ycc
+     REAL*8 :: delpos, slitsum, slit0, wvl
+
+     ! If there is no HW1E then no convolution to be done
+     if (hw .eq. 0) then
+        write (*, *) ' no gaussian convolution applied.'
+        yc = y
+        return
+     end if
+     
+     ! ------------------------------------------------------------------
+     ! Temporary input spectrum mirroed at the ends to ensure convolution
+     ! ------------------------------------------------------------------
+     ytemp(np+1:2*np) = y(1:np)
+     do i = 1, np
+        ytemp(np+1-i) = y(i)
+        ytemp(2*np+i) = y(np+1-i)
+     end DO
+
+     ! Work out spacinf of input spectrum
+     delpos = x(2) - x(1)
+     
+     ! Apply slit function convolution.
+     ! Calculate slit function values out to 0.001 times x0 value, normalize so that
+     ! sum = 1.
+     slitsum = 1.d0
+     nhalf = nslit / 2
+     slit = 0.d0
+     slit(nhalf) = 1.d0
+     getslit: do i = 1, nhalf-1
+        ! Right branch
+        wvl = delpos * i
+        slit(nhalf+i) = EXP(-(ABS( wvl / ( hw ) ) )**sh) ! + sign(REAL(1,KIND=8),wvl) * as ) ) )**sh)
+        ! Left branch
+        slit(nhalf-i) = EXP(-(ABS( wvl / ( hw ) ) )**sh) !+ sign(REAL(1,KIND=8),-wvl) * as ) ) )**sh)
+        ns = i
+        if (slit (nhalf+i) / slit(nhalf) .le. 0.001) exit getslit
+     end do getslit
+     slitsum = SUM(slit(nhalf-ns:nhalf+ns))
+     ! Normalize
+     do i = nhalf-ns, nhalf+ns
+        slit (i) = slit (i) / slitsum
+     end do
+
+     ! Convolve spectrum, reflect at endpoints.
+     do i = 1, np
+
+        ! ------------------------------------------------------
+        ! Starting index of spectrum contributing to convolution
+        ! ------------------------------------------------------
+        ss = np+i-ns
+        ! ----------------
+        ! Safe convolution
+        ! ----------------
+        yc(i) = dot_product(slit(nhalf-ns:nhalf+ns), ytemp(ss:ss+2*ns))
+     end do     
+     return
+   end subroutine super_gauss
+
+
 subroutine gauss (pos, spec, specmod, npoints, hw1e)
 
 ! Convolves input spectrum with Gaussian slit function of specified hw1e
@@ -2171,7 +2253,7 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
 
   ! Calculate the derivatives by finite differences. dyplus is y (var + finite
   ! difference in variable)
-  vars0 =vars
+  vars0 = vars
   do i = 1, nvaried
      var0 = vars0 (lista (i))
      vars0 (lista (i)) = vars0 (lista (i)) + diff (lista (i))
