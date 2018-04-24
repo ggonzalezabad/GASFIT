@@ -82,7 +82,7 @@ CONTAINS
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
-    REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad,  &
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad, sig_rad, &
          residual
 
     REAL*8 :: asum, avg, &
@@ -386,8 +386,9 @@ CONTAINS
             iprovar, 1)
 
        ! Shift and squeeze solar spectrum.
+       shift = var_sun(nshi); squeeze = var_sun(nsqe)
        do i = 1, npoints
-          pos_sun (i) = (pos_sun (i) - var_sun (nshi)) / (1.d0 + var_sun (nsqe))
+          pos_sun(i) = (pos_sun(i) - var_sun(nshi)) / (1.d0 + var_sun(nsqe))
        end do
        dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
             float (npoints - nvar_sun))
@@ -421,7 +422,7 @@ CONTAINS
 
     ! Save solar spectrum and undersampling spectrum in to database
     ! Sun
-    database (1,1:npoints) = spec_sun(1:npoints)
+    database(1,1:npoints) = spec_sun(1:npoints)
     ! Under sampling
     DO i = 1, npars
        IF (par_names(i) .EQ. us1_str) THEN
@@ -435,10 +436,6 @@ CONTAINS
     ! Calculate the splined fitting database. Note that the undersampled
     ! spectrum has just been done. Finish filling in reference database array.
     call dataspline (pos_sun(1:npoints), npoints, hw1e, shap, asym)
-
-    do i = 1, npoints
-       write(13,'(F7.3,1x,26(1pE10.2))') pos_sun(i), database(1:npars,i)
-    end do
 
     ! Deallocate variables
     DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
@@ -463,14 +460,14 @@ CONTAINS
     drelavg = 0.d0
     dshiftavg = 0.d0
 
+    ! Allocate general fitting variables
+    ALLOCATE(pos_rad(1:npoints),spec_rad(1:npoints),sig_rad(1:npoints))
+
     ! Add the weighting, in the single array.
     do i = 1, npoints
-       sig_sun(i) = 1.d30
-       if (i .ge. ll_rad .and. i .le. lu_rad) sig_sun(i) = 1.d0
+       sig_rad(i) = 1.d30
+       if (i .ge. ll_rad .and. i .le. lu_rad) sig_rad(i) = 1.d0
     end do
-
-    ! Allocate general fitting variables
-    ALLOCATE(pos_rad(1:npoints),spec_rad(1:npoints))
 
     ! Radiance loop
     radfit: DO 
@@ -508,6 +505,7 @@ CONTAINS
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
           if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
+
           ! If the pixel is to be processed read the radiance and save it in the right
           ! variables
           do j = 1, npoints
@@ -515,7 +513,30 @@ CONTAINS
              spec_rad(j) = spec_rad(j) / div_rad
           end do
           npixfit = npixfit + 1
+       
+          ! Renormalize, if requested
+          if (renorm) then
+             remult = 0.d0
+             if (weight_rad) then
+                sigsum = 0.d0
+                do j = 1, npoints
+                   remult = remult + spec_rad(j) / (sig_rad(j) * sig_rad(j))
+                   sigsum = sigsum + 1.d0 / (sig_rad(j) * sig_rad(j))
+                end do
+                remult = remult / sigsum
+             else
+                do j = 1, npoints
+                   remult = remult + spec_rad(j)
+                end do
+                remult = remult / npoints
+             end if
+             do j = 1, npoints
+                spec_rad(j) = spec_rad(j) / remult
+             end do
+          end if
+       
        else 
+
           if (wrt_scr) write(*,'(a,I5)') 'Skipping pixel # ',npix
           ! Dummy read non-processed radiance
           do j = 1, npoints
@@ -528,40 +549,11 @@ CONTAINS
     END DO radfit
 50  continue
     DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
-         pos_rad, spec_rad)
+         pos_rad, spec_rad, sig_rad)
+
+    print*, shift, squeeze
     stop
 
-!!$    ! Load database using nfirst wavelength scale.
-!!$    call spectrum (npoints, npars, avg, pos, fit, var, var_factor, par_str, 3, database)
-!!$    
-!!$    ! Fit radiance spectra that meet the input file selection requirements.
-!!$    do i = 1, nrads
-!!$       if (mod (i, 100) .eq. 0) write (*, *) ' nrad = ', i
-!!$       do j = 1, npoints
-!!$          pos (j) =  (pos_rad (i, j) - shift) / squeeze
-!!$          spec (j) =  spec_rad (i, j)
-!!$       end do
-!!$       
-!!$       ! Renormalize, if requested
-!!$       if (renorm) then
-!!$          remult = 0.d0
-!!$          if (weight_rad) then
-!!$             sigsum = 0.d0
-!!$             do j = 1, npoints
-!!$                remult = remult + spec (j) / (sig (j) * sig (j))
-!!$                sigsum = sigsum + 1.d0 / (sig (j) * sig (j))
-!!$             end do
-!!$             remult = remult / sigsum
-!!$          else
-!!$             do j = 1, npoints
-!!$                remult = remult + spec (j)
-!!$             end do
-!!$             remult = remult / npoints
-!!$          end if
-!!$          do j = 1, npoints
-!!$             spec (j) = spec (j) / remult
-!!$          end do
-!!$       end if
 !!$       
 !!$       if (.not. weight_rad) then
 !!$          avg = (pos (npoints) + pos (1)) / 2.
