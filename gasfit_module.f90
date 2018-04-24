@@ -7,10 +7,6 @@ MODULE GASFIT_MODULE
   REAL*8 :: delchi, provar, automult
   
 ! Parameters
-  INTEGER*4, PARAMETER :: mmax = 64
-  INTEGER*4, PARAMETER :: maxpts = 7000
-  INTEGER*4, PARAMETER :: maxpix = 2000
-  REAL*8, PARAMETER ::pi = 3.14159265358979d0
   CHARACTER(3), PARAMETER :: ad1_str='ad1', ad2_str='ad2', ble_str='ble', &
        scp_str='Scp', bsp_str='Bsp', alb_str='ALB', hwe_str='HWE', &
        shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
@@ -82,23 +78,22 @@ CONTAINS
 
     IMPLICIT NONE
     LOGICAL :: iprovar
-    REAL*8, ALLOCATABLE, DIMENSION(:) :: fit
-    REAL*8, DIMENSION(maxpts) :: spline_sun, &
-         deriv2sun, pos, spec, sig, temp, residual
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
+
+    INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
-    REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad,  &
+         residual
+
     REAL*8 :: asum, avg, &
          davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
          dshiftrad, gas, hw1e, shap, asym, remult, rmsavg, &
-         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
-    INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-         j, nfirst, ngas, nrads
-    INTEGER*4, DIMENSION(mmax) :: list_rad
-    INTEGER*4, DIMENSION(maxpix) :: npix, cld, year, month, day, hour, minu, sec
-    REAL*8, DIMENSION(maxpix) :: lat, lon, sza, saa, vza, vaa
+         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa, &
+         lat, lon, sza, saa, vza, vaa
     
-    ! Initialize the residual spectrum here.
-    residual = 0.d0
+    INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
+         j, nfirst, ngas, nrads, npix, npixfit, cld, year, month, day, &
+         hour, minu, sec
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
@@ -192,6 +187,7 @@ CONTAINS
     !
     read (21, '(a)') solar_line
     read (21, *) iterate_sun, weight_sun, n_solar_pars, ll_sun, lu_sun, div_sun
+
     ! Now that I know the number of solar fitting variables allocate
     ALLOCATE(var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), if_var_sun(1:n_solar_pars), &
          init_sun(1:n_solar_pars), list_sun(1:n_solar_pars), sun_par_names(1:n_solar_pars), &
@@ -248,8 +244,8 @@ CONTAINS
     read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
     
     ! Allocate radiance fitting parameter variables
-    ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), &
-         initial(1:npars), par_names(1:npars), var_factor(1:npars), par_str(1:npars))
+    ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), initial(1:npars), &
+         par_names(1:npars), var_factor(1:npars), par_str(1:npars),list_rad(1:npars))
     
     ! Read variables
     DO i = 1, npars
@@ -317,8 +313,8 @@ CONTAINS
        ! divide to avoid overflow issues.
        spec_sun (i) = spec_sun (i) / div_sun
        ! select fitting window by the use of weighting.
-       sig_sun (i) = 1.d30
-       if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun (i) = 1.d0
+       sig_sun(i) = 1.d30
+       if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun(i) = 1.d0
     end do
     
     ! Write out the input line and other input information.
@@ -346,7 +342,6 @@ CONTAINS
     ! iteration begins.
     iprovar = .false.
     if (iterate_sun) then
-
     
        ! Use strings to assign specific fitting parameter indices
        do i = 1, n_solar_pars
@@ -444,174 +439,98 @@ CONTAINS
     do i = 1, npoints
        write(13,'(F7.3,1x,26(1pE10.2))') pos_sun(i), database(1:npars,i)
     end do
-        
-    stop
+
+    ! Deallocate variables
+    DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
+         init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
+         kpspec_gauss)
+    
+    ! ----------------------------------------------------------------- !
+    ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
+    ! Fit the radiances (loop over to only keep one spectrum in memory) !
+    ! ----------------------------------------------------------------- !
+    ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
+    ! Initialize number of radiance pixels & number of radiance pixel fitted
+    npix = 0; npixfit = 0
 
     ! Initialize several diagnostics.
     ! rmsavg: average fitting rms.
     ! davg: average fitting uncertainty for reported parameter.
     ! drelavg: average relative fitting uncertainty for reported parameter.
     ! dshiftavg:  average fitting uncertainty for spectral shift parameter.
-    ! nfirst is the number among fitted radiances corresponding to the ground pixel
-    ! nfirstfit.
     rmsavg = 0.d0
     davg = 0.d0
     drelavg = 0.d0
     dshiftavg = 0.d0
-    nfirst = 0
 
-    ! Deallocate variables
-    DEALLOCATE(var_sun, diffsun, if_var_sun, init_sun, list_sun, &
-         var, var_factor, par_str, if_varied, diff, initial, pos_sun, spec_sun, sig_sun, &
-         sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
-         sun_par_str, var_sun_factor)
+    ! Add the weighting, in the single array.
+    do i = 1, npoints
+       sig_sun(i) = 1.d30
+       if (i .ge. ll_rad .and. i .le. lu_rad) sig_sun(i) = 1.d0
+    end do
 
-    stop
+    ! Allocate general fitting variables
+    ALLOCATE(pos_rad(1:npoints),spec_rad(1:npoints))
+
+    ! Radiance loop
+    radfit: DO 
+       ! Read the measured spectra.
+       !
+       ! ipix: The number of the radiance, counting consecutively along the orbit.
+       !
+       ! iyear (Year data was collected), imonth (Month data was collected), iday 
+       ! (Day data was collected), ihour (Hour data wav collected), imin 
+       ! (Minuted data was collected) and isec (Second data was collected)
+       !
+       ! ilat (Latitude data was collected), ilon
+       ! 1 is normally selected when we extract data from a GOME el1 file. Because of
+       ! longer integration times when the light conditions are low, sometimes our
+       ! selected band has not been read out, and we need to skip over these ground
+       ! pixels.
+       !
+       ! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
+       !
+       ! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
+       ! east/west edges and center of ground pixel.
+       !
+       ! zs, re: Satellite height and earth radius for each ground pixel measurement.
+       !
+       ! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
+       ! longitudes for 4 corners and center of ground pixel.
+       !
+       READ (23, *, end = 50) ipix, icld
+       READ (23, *) iyear, imonth, iday, ihour, imin, isec
+       READ (23, *) ilat, ilon
+       READ (23, *) isza, isaa, ivza, ivaa
+       npix = npix+1
        
-    ! Read the measured spectra.
-    !
-    ! ipix: The number of the radiance, counting consecutively along the orbit.
-    !
-    ! iyear (Year data was collected), imonth (Month data was collected), iday 
-    ! (Day data was collected), ihour (Hour data wav collected), imin 
-    ! (Minuted data was collected) and isec (Second data was collected)
-    !
-    ! ilat (Latitude data was collected), ilon
-    ! 1 is normally selected when we extract data from a GOME el1 file. Because of
-    ! longer integration times when the light conditions are low, sometimes our
-    ! selected band has not been read out, and we need to skip over these ground
-    ! pixels.
-    !
-    ! isub: Subpixel counter: 0 = east, 1 = center, 2 = west, 3 = flyback.
-    !
-    ! sza1, saa1, sza2, saa2, sza3, saa3: Solar zenith and azimuth angles for
-    ! east/west edges and center of ground pixel.
-    !
-    ! zs, re: Satellite height and earth radius for each ground pixel measurement.
-    !
-    ! lat1, lon1, lat2, lon2, lat3, lon3, lat4, lon4,  latc, lonc: Latitudes and
-    ! longitudes for 4 corners and center of ground pixel.
-    !
-    i = 1
-!!$40  READ (23, *, end = 50) ipix, icld
-!!$    READ (23, *) iyear, imonth, iday, ihour, imin, isec
-!!$    READ (23, *) ilat, ilon
-!!$    READ (23, *) isza, isaa, ivza, ivaa
-!!$       
-!!$       ! Decide whether to process. If so, update the appropriate arrays and the
-!!$       ! counter for radiances being fitted.
-!!$       IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
-!!$            (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
-!!$          npix(i) = ipix
-!!$          cld(i) = icld
-!!$          year(i) = iyear
-!!$          month(i) = imonth
-!!$          day(i) = iday
-!!$          hour(i) = ihour
-!!$          minu(i) = imin
-!!$          sec(i) = isec
-!!$          sza(i) = isza
-!!$          saa(i) = isaa
-!!$          vza(i) = ivza
-!!$          vaa(i) = ivaa
-!!$          lat(i) = ilat
-!!$          lon(i) = ilon
-!!$          !   Read radiance spectrum (positions and radiances) for each ground pixel.
-!!$          do j = 1, npoints
-!!$             read (23, *) pos_rad (i, j), spec_rad (i, j)
-!!$             spec_rad (i, j) = spec_rad (i, j) / div_rad ! usually 1.d13 or 1.d14
-!!$          end do
-!!$          !   Is this the pixel selected for full wavelength calibration?
-!!$          if (ipix .eq. nfirstfit) nfirst = i
-!!$          i = i + 1
-!!$          !   Ignore spectra not selected for processing.
-!!$       else 
-!!$          do j = 1, npoints
-!!$             read (23, *)
-!!$          end do
-!!$       end if
-!!$       go to 40
-!!$50     nrads = i - 1
-!!$       if (nrads .eq. 0) then
-!!$          write (*, *) 'nrads = 0'
-!!$          stop
-!!$       end if
-!!$       
-!!$       ! if there is no spectrum corresponding to nfirstfit, select nfirst halfway
-!!$       ! along the orbit.
-!!$       if (nfirst .eq. 0) nfirst = CEILING(FLOAT(nrads)/2.0)
-!!$       
-!!$       ! Add the weighting, in the single array.
-!!$       do i = 1, npoints
-!!$          sig(i) = 1.d6
-!!$          if (i .ge. ll_rad .and. i .le. lu_rad) sig(i) = 1.d0
-!!$       end do
-!!$       
-!!$       ! Order the coefficients for mrqmin and save the initial values of the
-!!$       ! coefficients (uncomment if slit variation freeze is to be implemented).
-!!$       ! nvar_sun = 0
-!!$       ! do i = 1, n_solar_pars
-!!$       !   init_sun (i) = var_sun (i)
-!!$       !   if (if_var_sun (i)) then
-!!$       !     nvar_sun = nvar_sun + 1
-!!$       !     list_sun (nvar_sun) = i
-!!$       !   end if
-!!$       ! end do
-!!$       
-!!$       ! Select and wavelength calibrate selected radiance spectrum.
-!!$       write (*, *) ' nfirst = ', nfirst
-!!$       do i = 1, npoints
-!!$          pos (i) = pos_rad (nfirst, i)
-!!$          spec (i) = spec_rad (nfirst, i)
-!!$       end do
-!!$       if (.not. weight_sun) then
-!!$          avg = (pos (npoints) + pos (1)) / 2.
-!!$       else
-!!$          asum = 0.
-!!$          ssum = 0.
-!!$          do i = 1, npoints
-!!$             asum = asum + pos (i) / (sig (i)**2)
-!!$             ssum = ssum + 1. / (sig (i)**2)
-!!$          end do
-!!$          avg = asum / ssum
-!!$       end if
-!!$       iprovar = .false.
-!!$  call specfit (npoints, n_solar_pars, nvar_sun, list_sun, iteration, &
-!!$    avg, spec, pos, sig, fit, var_sun, chisq, delchi, diffsun, correl, covar, &
-!!$    rms, provar, iprovar, wrt_scr, 2, database)
-!!$  dshift = rms * sqrt (covar (10, 10) * float (npoints) / float (npoints - &
-!!$    nvar_sun))
-!!$       write (*, '(a, 1p2e14.6)') 'rad: shift, 1 sigma = ', - var_sun (11), dshift
-!!$       
-!!$       ! Save parameters, to shift and squeeze radiance spectra. Remember SIGN of shift
-!!$       ! determined this way, because it is minus the shift required to wavelength
-!!$       ! correct the satellite radiance/irradiance spectra!
-!!$       shift = var_sun (11)
-!!$       squeeze = 1.d0 + var_sun (12)
-!!$       
-!!$       ! Apply them to current positions, for undersampling and data-splining
-!!$       ! calculations.
-!!$       do i = 1, npoints
-!!$          pos (i) = (pos (i) - shift) / squeeze
-!!$       end do
-!!$       ! else (later) calculate sun and radiance spectrum
-!!$    
-!!$    ! Calculate the undersampled spectrum.
-!!$    call undersample (pos, npoints, underspec, hw1e, phase, wrt_scr)
-!!$    
-!!$    ! Calculate the splined fitting database. Note that the undersampled
-!!$    ! spectrum has just been done. Finish filling in reference database array.
-!!$    call dataspline (pos, npoints, database, wrt_scr)
-!!$    
-!!$    ! Spline irradiance spectrum onto radiance grid.
-!!$    call spline (pos_sun, spec_sun, npoints, deriv2sun)
-!!$    call splint (pos_sun, spec_sun, deriv2sun, npoints, npoints, pos, spline_sun)
-!!$    do i = 1, npoints
-!!$       database (1, i) = spline_sun (i)
-!!$       database (9, i) = underspec (1, i)
-!!$       database (10, i) = underspec (2, i)
-!!$    end do
-!!$      
+       ! Decide whether to process. If so, update the appropriate arrays
+       IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
+            (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
+          if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
+          ! If the pixel is to be processed read the radiance and save it in the right
+          ! variables
+          do j = 1, npoints
+             read (23, *) pos_rad(j), spec_rad(j)
+             spec_rad(j) = spec_rad(j) / div_rad
+          end do
+          npixfit = npixfit + 1
+       else 
+          if (wrt_scr) write(*,'(a,I5)') 'Skipping pixel # ',npix
+          ! Dummy read non-processed radiance
+          do j = 1, npoints
+             read (23, *)
+          end do
+          ! Cycle this skipped pixel
+          cycle
+       end if     
+
+    END DO radfit
+50  continue
+    DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
+         pos_rad, spec_rad)
+    stop
+
 !!$    ! Load database using nfirst wavelength scale.
 !!$    call spectrum (npoints, npars, avg, pos, fit, var, var_factor, par_str, 3, database)
 !!$    
@@ -746,7 +665,7 @@ CONTAINS
 !!$       end do
 !!$    end if
     
-1000 close (unit = 21)
+    close (unit = 21)
     close (unit = 22)
     close (unit = 23)
     close (unit = 24)
@@ -871,9 +790,7 @@ CONTAINS
     ! the calculation type and initializing the fitting reference database.
     ! ntype = 1: Solar wavelength calibration. Open kpnospec, the high spectral
     ! resolution irradiance reference spectrum.
-    ! ntype = 2: Radiance wavelength calibration (kpnospec already open).
-    ! ntype = 3: First radiance fit (fill refspec from database).
-    ! ntype = 4: Later radiance fits (refspec already filled).
+    ! ntype /= 1: Later radiance fits (refspec already filled).
     IMPLICIT NONE
 
     ! Input variables
@@ -890,11 +807,8 @@ CONTAINS
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
     INTEGER*4 :: i, jmax, j
     REAL*8 :: hw, sh, as, sun_avg
-    REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline
-    REAL*8 :: sunpos(1:maxpts), refspec(1:maxpts,1:10)
-    REAL*8 :: sunpos_ss(maxpts),sunspec(maxpts)
-    REAL*8 :: sunspec_ss(maxpts)
-    REAL*8 :: suntemp(maxpts), reftemp(maxpts, 10)
+    REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline, &
+         sunpos, sunpos_ss, sunspec, sunspec_ss
     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2sun
     CHARACTER*120 :: kpnospec
     LOGICAL :: first_sun=.true.
@@ -924,32 +838,21 @@ CONTAINS
           kpspec(1:nkppos) = kpspec(1:nkppos) / sun_avg
           close (unit = 25)
        end if ! on first_sun
-    else if (ntype .eq. 3) then
-       ! The following kluge keeps me from extra re-writing.
-       nkppos = npoints
-       do i = 1, nkppos
-          sunpos (i) = pos (i)
-          sunspec (i) = database (1, i)
-          do j = 1, 10
-             refspec (i, j) = database (j + 1, i)
-          end do
-       end do
-       return ! ntype = 3, database loaded.
-    end if ! on ntype.
+    end if
 
     ! Calculate the spectrum: First do the shift and squeeze. Shift var (nshi),
     ! squeeze by 1 + var (nsqe); do in absolute sense, to make it easy to back-convert
     ! radiance data.
     do i = 1, nkppos
-       if (ntype .eq. 1 .or. ntype .eq. 2) then
-          kppos_ss (i) = kppos (i) * (1.d0 + var(nsqe)) + var(nshi)
+       if (ntype .eq. 1) then
+          kppos_ss(i) = kppos(i) * (1.d0 + var(nsqe)) + var(nshi)
        else
-          sunpos_ss (i) = sunpos (i) * (1.d0 + var(nsqe)) + var(nshi)
+          sunpos_ss(i) = sunpos(i) * (1.d0 + var(nsqe)) + var(nshi)
        end if
     end do
     
     ! Broadening and re-sampling of solar spectrum.
-    if (ntype .eq. 1 .or. ntype .eq. 2) then
+    if (ntype .eq. 1) then
        ! Case for wavelength fitting of irradiance and radiance.
        ! Broaden the solar reference by the hw1e value with shape
        ! factor sh and asymmetric factor as.
@@ -962,9 +865,9 @@ CONTAINS
        DEALLOCATE(d2sun)
     else
        ! Re-sample the solar reference spectrum to the radiance grid.
-       ALLOCATE(d2sun(1:nkppos))
-       call spline (sunpos_ss, sunspec, nkppos, d2sun)
-       call splint (sunpos_ss, sunspec, d2sun, nkppos, npoints, pos, sunspec_ss)
+       ALLOCATE(d2sun(1:npoints))
+       call spline (sunpos_ss, sunspec, npoints, d2sun)
+       call splint (sunpos_ss, sunspec, d2sun, npoints, npoints, pos, sunspec_ss)
        DEALLOCATE(d2sun)
     end if
 
@@ -974,15 +877,15 @@ CONTAINS
     ! Now loop over the rest of parameters to add BOAS, and polynomial contributions
     ! Initial add-on contributions
     do i = 1, npars
-       IF (str(i) .EQ. ad1_str) fit(1:npoints) = fit(1:npoints) + var(i) * refspec(1:npoints,i)
+       IF (str(i) .EQ. ad1_str) fit(1:npoints) = fit(1:npoints) + var(i) * database(i,1:npoints)
     end do
     ! Beer's law contributions
     do i = 1, npars
-       IF (str(i) .EQ. ble_str) fit(1:npoints) = fit(1:npoints) * dexp(-var(i) * refspec(1:npoints,i))
+       IF (str(i) .EQ. ble_str) fit(1:npoints) = fit(1:npoints) * dexp(-var(i) * database(i,1:npoints))
     end do
     ! Final add-on contributions
     do i = 1, npars
-       IF (str(i) .EQ. ad2_str) fit(1:npoints) = fit(1:npoints) + var(i) * refspec(1:npoints,i)
+       IF (str(i) .EQ. ad2_str) fit(1:npoints) = fit(1:npoints) + var(i) * database(i,1:npoints)
     end do
     ! Polynomials
     del(1:npoints) = pos(1:npoints) - avg
@@ -1198,8 +1101,6 @@ CONTAINS
     
     ! Summarizes the inputs for later reference.
     write (22, '(1x, t2, a)') 'BOAS fitting'
-    write (22, '(1x, t2, a, t33, i3, t36, a)') 'maximum number of parameters =', &
-         mmax, '.'
     write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') npars, &
          'total parameters used,', nvaried, 'varied.'
     write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') n_solar_pars, &
