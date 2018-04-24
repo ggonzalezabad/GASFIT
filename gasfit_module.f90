@@ -11,6 +11,10 @@ MODULE GASFIT_MODULE
   INTEGER*4, PARAMETER :: maxpts = 7000
   INTEGER*4, PARAMETER :: maxpix = 2000
   REAL*8, PARAMETER ::pi = 3.14159265358979d0
+  CHARACTER(3), PARAMETER :: ad1_str='ad1', ad2_str='ad2', ble_str='ble', &
+       scp_str='Scp', bsp_str='Bsp', alb_str='ALB', hwe_str='HWE', &
+       shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
+       us1_str='us1', us2_str='us2'
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
@@ -27,11 +31,12 @@ MODULE GASFIT_MODULE
   INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
   REAL*8 :: div_sun
   REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun, var_sun_factor
-  CHARACTER(3), PARAMETER :: alb_str='ALB', hwe_str='HWE', shi_str='SHI', &
-       sqe_str='SQE', sha_str='SHA', asy_str='ASY', bsp_str='Bsp', scp_str='Scp'
 
 ! Solar spectrum
   REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
+
+! Database of reference cross sections
+  REAL*8, ALLOCATABLE, DIMENSION(:,:) :: database
 
 ! Radiance fitting control & variables (read from input control file)
   CHARACTER(256) :: radiance_line
@@ -40,7 +45,7 @@ MODULE GASFIT_MODULE
   LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
   LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
   INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, npars, nvaried, &
-       nhw1erad, nshiftrad, nsqueezerad, nshaperad
+       nralb, nrhwe, nrshi, nrsqe, nrsha, nrasy
   REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
   REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff, var_factor
 
@@ -81,7 +86,6 @@ CONTAINS
     REAL*8, DIMENSION(maxpts) :: spline_sun, &
          deriv2sun, pos, spec, sig, temp, residual
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
-    REAL*8, DIMENSION(11,maxpts) :: database
     REAL*8, DIMENSION(maxpix,maxpts) :: pos_rad, spec_rad
     REAL*8 :: asum, avg, &
          davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
@@ -240,8 +244,7 @@ CONTAINS
     !
     read (21, '(a)') radiance_line
     read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-         div_rad, phase, nreport, report_mult, npars, nhw1erad, nshiftrad, &
-         nsqueezerad, nshaperad
+         div_rad, phase, nreport, report_mult, npars
     read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
     
     ! Allocate radiance fitting parameter variables
@@ -250,7 +253,7 @@ CONTAINS
     
     ! Read variables
     DO i = 1, npars
-       read (21, *) j, var(i), if_varied(i), diff(i), par_names(i)
+       read (21, *) j, var(i), if_varied(i), diff(i), par_str(i), var_factor(i), par_names(i)
     END DO
     
     ! Automatic difference-taking.
@@ -259,6 +262,15 @@ CONTAINS
           if (if_varied (i)) diff (i) = dabs (automult * var (i))
        end do
     end if
+
+    do i = 1, npars
+       IF (par_str(i) .EQ. alb_str) nralb = i 
+       IF (par_str(i) .EQ. hwe_str) nrhwe = i 
+       IF (par_str(i) .EQ. shi_str) nrshi = i 
+       IF (par_str(i) .EQ. sqe_str) nrsqe = i 
+       IF (par_str(i) .EQ. sha_str) nrsha = i 
+       IF (par_str(i) .EQ. asy_str) nrasy = i 
+    end do
     
     ! Order the coefficients for mrqmin and save the initial values of the
     ! coefficients.
@@ -271,20 +283,17 @@ CONTAINS
           if (i .eq. nreport) ngas = nvaried
        end if
     end do
-    if (nvaried .gt. mmax) then
-       write (22, *) ' maximum number of radiance parameters exceeded.'
-       go to 1000
-    end if
     if (wrt_scr) write (*, *) 'nvaried  =', nvaried
     if (wrt_scr) write (*, *) 'Max. sza =', szamax
     if (wrt_scr) write (*, *) 'Min. sza =', szamin
     if (wrt_scr) write (*, *) 'Max. lat =', latmax
     if (wrt_scr) write (*, *) 'Min. lat =', latmin
     if (wrt_scr) write (*, *) 'Max. cld =', cldmax
-    if (wrt_scr) write (*, *) 'nhw1e    =', nhw1erad
-    if (wrt_scr) write (*, *) 'nshift   =', nshiftrad
-    if (wrt_scr) write (*, *) 'nsqueeze =', nsqueezerad
-    if (wrt_scr) write (*, *) 'nshape   =', nshaperad
+    if (wrt_scr) write (*, *) 'nhw1e    =', nrhwe
+    if (wrt_scr) write (*, *) 'nshift   =', nrshi
+    if (wrt_scr) write (*, *) 'nsqueeze =', nrsqe
+    if (wrt_scr) write (*, *) 'nshape   =', nrsha
+    if (wrt_scr) write (*, *) 'nasym    =', nrasy
     
     ! Open irradiance and radiance level 1 file.
     if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
@@ -371,15 +380,15 @@ CONTAINS
        
        ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
        ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-            fit(1:npoints))
-       correl = 0.0d0; covar=0.0d0; fit=0.0d0
+            fit(1:npoints),database(npars+4,1:npoints))
+       correl = 0.0d0; covar=0.0d0; fit=0.0d0; database = 0.0d0
 
        ! Perform fit
        call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
             avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
             fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
             var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
-            iprovar, 1, database)
+            iprovar, 1)
 
        ! Shift and squeeze solar spectrum.
        do i = 1, npoints
@@ -414,24 +423,28 @@ CONTAINS
     ! Calculate the undersampled spectrum.
     ALLOCATE(underspec(1:2,1:npoints))
     call undersample (pos_sun(1:npoints), npoints, underspec, phase)
-    
-!!$    ! Calculate the splined fitting database. Note that the undersampled
-!!$    ! spectrum has just been done. Finish filling in reference database array.
-!!$    call dataspline (pos, npoints, database, wrt_scr)
-!!$    
-!!$    ! Spline irradiance spectrum onto radiance grid.
-!!$    call spline (pos_sun, spec_sun, npoints, deriv2sun)
-!!$    call splint (pos_sun, spec_sun, deriv2sun, npoints, npoints, pos, spline_sun)
-!!$    do i = 1, npoints
-!!$       database (1, i) = spline_sun (i)
-!!$       database (9, i) = underspec (1, i)
-!!$       database (10, i) = underspec (2, i)
-!!$    end do
-    do i =1, npoints
-       write(13,*) pos_sun(i), underspec(1:2,i)
-    end do
-    
+
+    ! Save solar spectrum and undersampling spectrum in to database
+    ! Sun
+    database (1,1:npoints) = spec_sun(1:npoints)
+    ! Under sampling
+    DO i = 1, npars
+       IF (par_names(i) .EQ. us1_str) THEN
+          database(i,1:npoints)  = underspec(1,1:npoints)
+       ELSE IF (par_names(i) .EQ. us2_str) THEN
+          database(i,1:npoints)  = underspec(2,1:npoints)
+       END IF
+    END DO
     DEALLOCATE(underspec)
+
+    ! Calculate the splined fitting database. Note that the undersampled
+    ! spectrum has just been done. Finish filling in reference database array.
+    call dataspline (pos_sun(1:npoints), npoints, hw1e, shap, asym)
+
+    do i = 1, npoints
+       write(13,'(F7.3,1x,26(1pE10.2))') pos_sun(i), database(1:npars,i)
+    end do
+        
     stop
 
     ! Initialize several diagnostics.
@@ -453,7 +466,6 @@ CONTAINS
          sun_par_names, par_names, kppos, kpspec, kppos_ss, kpspec_gauss, &
          sun_par_str, var_sun_factor)
 
-    ! Build up database of reference cross sections
     stop
        
     ! Read the measured spectra.
@@ -655,7 +667,7 @@ CONTAINS
 !!$          !   BOAS fitting now done here.
 !!$    call specfit (npoints, npars, nvaried, list_rad, iteration, avg, &
 !!$      spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, &
-!!$      provar, iprovar, wrt_scr, 4, database)
+!!$      provar, iprovar, wrt_scr, 4)
 
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
@@ -742,7 +754,7 @@ CONTAINS
   END SUBROUTINE GASFIT
 
   SUBROUTINE specfit (np, npars, nvaried, lista, avg, &
-       spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, ntype, database)
+       spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, ntype)
     ! Driver for Levenberg-Marquardt nonlinear least squares minimization.
     
     IMPLICIT NONE
@@ -765,7 +777,6 @@ CONTAINS
     ! Local variables
     REAL*8 :: alamda, ochisq, difftest, prop, rsum
     REAL*8, DIMENSION(1:npars) :: var0
-    REAL*8, DIMENSION(11,np) :: database
     INTEGER*4 :: itest, i, j    
     external funcs
     
@@ -773,7 +784,7 @@ CONTAINS
     ! First call to minimization routine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
          fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-         funcs, alamda, avg, diff(1:npars), ntype, database)
+         funcs, alamda, avg, diff(1:npars), ntype)
     iteration = 1
     itest = 0
 
@@ -797,7 +808,7 @@ CONTAINS
        ! Iteration over the minimization
        call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
             fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-            funcs, alamda, avg, diff(1:npars), ntype, database)
+            funcs, alamda, avg, diff(1:npars), ntype)
 
        do i = 1, nvaried
           prop = abs (var0 (lista (i)) - var (lista (i)))
@@ -818,7 +829,7 @@ CONTAINS
     ! Final call to minimization subroutine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
          fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-         funcs, alamda, avg, diff(1:npars), ntype, database)
+         funcs, alamda, avg, diff(1:npars), ntype)
     if (wrt_scr) then
        write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
             iteration, 'chi-squared: ', chisq, 'alamda:', alamda
@@ -841,7 +852,7 @@ CONTAINS
     
     ! Calculate the final spectrum.
     call spectrum (np, npars, avg, pos(1:np), fit_spec(1:np), &
-    var(1:npars), fac(1:npars), str(1:npars), ntype, database)
+    var(1:npars), fac(1:npars), str(1:npars), ntype)
     
     ! Calculate the rms of the fit.
     rsum = 0.
@@ -853,7 +864,7 @@ CONTAINS
     return
   END SUBROUTINE specfit
 
-  subroutine spectrum (npoints, npars, avg, pos, fit, var, fac, str, ntype, database)
+  subroutine spectrum (npoints, npars, avg, pos, fit, var, fac, str, ntype)
     
     ! Spectrum calculation for both fitting and non-fitting cases. For fitting, it
     ! is called with 4 different qualifiers ("ntypes") for purposes of determining
@@ -875,12 +886,7 @@ CONTAINS
     ! Output variables
     REAL*8, INTENT(OUT), DIMENSION(1:npoints) :: fit
 
-    ! Modified variables
-    REAL*8, INTENT(INOUT), DIMENSION(11,1:npoints) :: database
-
     ! Local variables
-    CHARACTER(3), PARAMETER :: ad1_str='ad1', ad2_str='ad2', ble_str='ble', &
-         scp_str='Scp', bsp_str='Bsp'
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
     INTEGER*4 :: i, jmax, j
     REAL*8 :: hw, sh, as, sun_avg
@@ -997,7 +1003,7 @@ CONTAINS
   end subroutine spectrum
   
   subroutine mrqmin (x, y, sig, ndata, a, fac, str, ma, lista, mfit, &
-       funcs, alamda, avg, diff, ntype, database)
+       funcs, alamda, avg, diff, ntype)
     
     ! Levenberg-Marquardt minimization adapted from Numerical Recipes.
     IMPLICIT NONE
@@ -1010,7 +1016,6 @@ CONTAINS
     
     ! Modified variables
     REAL*8, INTENT(INOUT), DIMENSION(1:ma) :: a
-    REAL*8, INTENT(INOUT), DIMENSION(11,ndata) :: database
     REAL*8, INTENT(INOUT) :: alamda
     INTEGER*4, INTENT(INOUT), DIMENSION(1:ma) :: lista
     
@@ -1051,7 +1056,7 @@ CONTAINS
        alamda = 0.001
        ! Initial fit
        call mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, &
-            beta, avg, diff, ntype, database)
+            beta, avg, diff, ntype)
        ! Save chisq for later use
        ochisq = chisq
        ! Initialize new fitting parameters
@@ -1106,7 +1111,7 @@ CONTAINS
 
     ! Try out new parameters (atry)
     call mrqcof (x, y, sig, ndata, atry, fac, str, ma, lista, mfit, covar, da, &
-         avg, diff, ntype, database)
+         avg, diff, ntype)
 
     ! If the new parameters are more succesful
     if (chisq .lt. ochisq) then
@@ -1131,7 +1136,7 @@ CONTAINS
   end subroutine mrqmin
 
   subroutine mrqcof (x, y, sig, ndata, a, fac, str, ma, lista, mfit, alpha, beta, &
-       avg, diff, ntype, database)
+       avg, diff, ntype)
     
     ! Calculates chi-squared gradient and curvature matrices for the Levenberg-
     ! Marquardt minimization. From Numerical Recipes.
@@ -1148,7 +1153,6 @@ CONTAINS
     ! Modified variables
     REAL*8, INTENT(OUT), DIMENSION(1:ma) :: beta
     REAL*8, INTENT(OUT), DIMENSION(1:ma,1:ma) :: alpha
-    REAL*8, INTENT(INOUT), DIMENSION(11,1:ndata) :: database
 
     ! Local variabes
     REAL*8, DIMENSION(1:ma,1:ndata) :: dyda
@@ -1166,7 +1170,7 @@ CONTAINS
     chisq = 0.
 
     call funcs (x, ndata, a, fac, str, ymod, dyda, ma, lista, mfit, avg, diff, &
-         ntype, database)
+         ntype)
     do i = 1, ndata
        sig2i = 1./ (sig (i) * sig (i))
        dy = y (i) - ymod (i)
@@ -1187,1017 +1191,639 @@ CONTAINS
     return
   end subroutine mrqcof
 
-SUBROUTINE write_input()
+  SUBROUTINE write_input()
 
-IMPLICIT NONE
-INTEGER*4 :: i
-save
-
-! Summarizes the inputs for later reference.
-write (22, '(1x, t2, a)') 'BOAS fitting'
-write (22, '(1x, t2, a, t33, i3, t36, a)') 'maximum number of parameters =', &
-  mmax, '.'
-write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') npars, &
-  'total parameters used,', nvaried, 'varied.'
-write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') n_solar_pars, &
-  'solar parameters used,', nvar_sun, 'varied.'
-write (22, '(1x, t2, a, t13, i4, t18, a)') 'spectra of', npoints, &
-  'points were calculated.'
-write (22, *)
-if (iterate_rad) then
-  write (22, *) 'radiance iteration is enabled.'
-else
-  write (22, *) 'radiance iteration is disabled.'
-end if
-if (iterate_sun) then
-  write (22, *) 'solar iteration is enabled.'
-else
-  write (22, *) 'solar iteration is disabled.'
-end if
-if (weight_rad) then
-  write (22, *) 'radiance weighting is enabled.'
-  write (22, *) 'll_rad = ', ll_rad, 'lu_rad = ', lu_rad
-else
-  write (22, *) 'radiance weighting is disabled.'
-end if
-if (weight_sun) then
-  write (22, *) 'solar weighting is enabled.'
-  write (22, *) 'll_sun = ', ll_sun, 'lu_sun = ', lu_sun
-else
-  write (22, *) 'solar weighting is disabled.'
-end if
-if (autodiff) then
-  write (22, *) 'autodiff enabled; finite differences taken'
-  write (22, '(2x,a,1pE9.3,a)') 'with ', automult, ' times initial variable.'
-end if
-write (22, '(1x, t2, a, t51, 1pe9.3)') &
-  'convergence for relative parameter change set at ', provar
-write (22, *) 'times the differentiation parameter for each variable.'
-write (22, *) ' renorm = ', renorm
-write (22, *) ' update_pars = ', update_pars
-write (22, *) ' wrt_scr = ', wrt_scr
-write (22, '(a, f7.2)') '  szamax =', szamax
-write (22, '(a, f7.2)') '  szamin =', szamin
-write (22, '(a, I3)') '  cldmax =', cldmax
-write (22, '(a, f7.2)') '  latmax =', latmax
-write (22, '(a, f7.2)') '  latmin =', latmin
-write (22, '(a, i6)') '  nfirst =', nfirstfit
-write (22, '(a, f8.4)') '  phase =', phase
-
-write (22, *)
-write (22,'(1x, a)') 'Solar Fitting'
-write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
-DO i = 1, n_solar_pars
-   write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(sun_par_names(i)), init_sun(i), if_var_sun(i)
-END DO
-
-write (22, *)
-write (22,'(1x, a)') 'Radiance Fitting'
-write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
-DO i = 1, npars
-   write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(par_names(i)), initial(i), if_varied(i)
-END DO
-write (22, *)
-
-return
-end subroutine write_input
-!
-subroutine write_output (nvaried, lista, iteration, write_fit, write_spec, &
-  iterate, pos, spec, fit, var, initial, covar, chisq, delchi, correl, rms, &
-  npoints, weight, provar, iprovar)
-
-! Detailed fitting diagnostics. Best when only fitting a very few spectra!
-
-implicit real*8 (a - h, o - z)
-parameter (mmax = 64)
-parameter (maxpts = 7000)
-logical write_fit, write_spec, iterate, weight, iprovar
-real*8 initial (mmax)
-dimension pos (maxpts), spec (maxpts), fit (maxpts)
-dimension lista (mmax)
-dimension covar (mmax, mmax), correl (mmax, mmax)
-dimension var (mmax)
-save
-
-write (*, *) 'writing fitting output file'
-if (iterate) then
-  write (22, '(/,1x,t2,a,t28,i3,t32,a)') 'convergence reached after', &
-    iteration, ' iterations.'
-  if (iprovar) then
-    write (22, '(1x,t2,a)') &
-      'convergence criterion is a change in every variable by less than or'
-    write (22, '(1x,t2,a,t11,1pe9.3,t21,a)') &
-      'equal to ', provar, 'times the differential parameters.'
-    write (22, '(1x,t2,a,t26,1pe10.4,t36,a,//)') 'final value of chisq is', &
-      chisq, '.'
-  else
-    write (22, '(1x,t2,a,t58,1pe10.4,t68,a)') &
-      'convergence criterion is a change in chisq by less than', delchi, &
-      ' for two'
-    write (22, '(1x,t2,a,t50,1pe10.4,t60,a)') &
-    'successive iterations.  final value of chisq is', chisq, '.'
-  end if
-  write (22, '(/,1x,t2,a,t8,1pe10.4,t18,a,/)') 'rms = ', rms, '.'
-  write (22, '(1x,t32,a,/)') 'final parameters'
-  write (22, '(1x,t2,a)') &
-    'parameter    initial value    final value      std. deviation'
-  do i = 1, nvaried
-    j = lista (i)
-    if (weight) then
-      write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
-      var (j), rms * sqrt (covar (i, i) * float (npoints) / &
-      float (npoints - nvaried))
+    IMPLICIT NONE
+    INTEGER*4 :: i
+    
+    ! Summarizes the inputs for later reference.
+    write (22, '(1x, t2, a)') 'BOAS fitting'
+    write (22, '(1x, t2, a, t33, i3, t36, a)') 'maximum number of parameters =', &
+         mmax, '.'
+    write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') npars, &
+         'total parameters used,', nvaried, 'varied.'
+    write (22, '(1x, t2, i3, t6, a, t29, i3, t33, a)') n_solar_pars, &
+         'solar parameters used,', nvar_sun, 'varied.'
+    write (22, '(1x, t2, a, t13, i4, t18, a)') 'spectra of', npoints, &
+         'points were calculated.'
+    write (22, *)
+    if (iterate_rad) then
+       write (22, *) 'radiance iteration is enabled.'
     else
-      write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
-      var (j), rms * sqrt (covar (i, i) * float (npoints) / &
-      float (npoints - nvaried))
+       write (22, *) 'radiance iteration is disabled.'
     end if
-  end do
-  write (22, '(/,1x,t31,a)') 'correlation matrix'
-  do i = 1, nvaried
-    write (22, '(/,1x,12(2x,f8.5))') (correl (i, j), j = 1, i)
-  end do
-end if
+    if (iterate_sun) then
+       write (22, *) 'solar iteration is enabled.'
+    else
+       write (22, *) 'solar iteration is disabled.'
+    end if
+    if (weight_rad) then
+       write (22, *) 'radiance weighting is enabled.'
+       write (22, *) 'll_rad = ', ll_rad, 'lu_rad = ', lu_rad
+    else
+       write (22, *) 'radiance weighting is disabled.'
+    end if
+    if (weight_sun) then
+       write (22, *) 'solar weighting is enabled.'
+       write (22, *) 'll_sun = ', ll_sun, 'lu_sun = ', lu_sun
+    else
+       write (22, *) 'solar weighting is disabled.'
+    end if
+    if (autodiff) then
+       write (22, *) 'autodiff enabled; finite differences taken'
+       write (22, '(2x,a,1pE9.3,a)') 'with ', automult, ' times initial variable.'
+    end if
+    write (22, '(1x, t2, a, t51, 1pe9.3)') &
+         'convergence for relative parameter change set at ', provar
+    write (22, *) 'times the differentiation parameter for each variable.'
+    write (22, *) ' renorm = ', renorm
+    write (22, *) ' update_pars = ', update_pars
+    write (22, *) ' wrt_scr = ', wrt_scr
+    write (22, '(a, f7.2)') '  szamax =', szamax
+    write (22, '(a, f7.2)') '  szamin =', szamin
+    write (22, '(a, I3)') '  cldmax =', cldmax
+    write (22, '(a, f7.2)') '  latmax =', latmax
+    write (22, '(a, f7.2)') '  latmin =', latmin
+    write (22, '(a, i6)') '  nfirst =', nfirstfit
+    write (22, '(a, f8.4)') '  phase =', phase
+    
+    write (22, *)
+    write (22,'(1x, a)') 'Solar Fitting'
+    write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
+    DO i = 1, n_solar_pars
+       write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(sun_par_names(i)), init_sun(i), if_var_sun(i)
+    END DO
+    
+    write (22, *)
+    write (22,'(1x, a)') 'Radiance Fitting'
+    write (22,'(T3,A9,T33,A13,T50,A6)') 'Parameter','Initial value','Varied'
+    DO i = 1, npars
+       write (22,'(T4,A,T32,1pE13.5,T52,L)') TRIM(par_names(i)), initial(i), if_varied(i)
+    END DO
+    write (22, *)
+    
+    return
+  end subroutine write_input
 
-if (write_spec) then
-  if (write_fit) write (*, *) 'writing spectrum output file'
-  do i = 1, npoints
-    write (24, '(f10.5, 1p3e13.5)') pos (i), spec (i), fit (i), spec (i) - &
-    fit (i)
-  end do
-end if
+  subroutine write_output (nvaried, lista, iteration, write_fit, write_spec, &
+       iterate, pos, spec, fit, var, initial, covar, chisq, delchi, correl, rms, &
+       npoints, weight, provar, iprovar)
+    
+    ! Detailed fitting diagnostics. Best when only fitting a very few spectra!
 
-return
-end subroutine write_output
+    implicit real*8 (a - h, o - z)
+    parameter (mmax = 64)
+    parameter (maxpts = 7000)
+    logical write_fit, write_spec, iterate, weight, iprovar
+    real*8 initial (mmax)
+    dimension pos (maxpts), spec (maxpts), fit (maxpts)
+    dimension lista (mmax)
+    dimension covar (mmax, mmax), correl (mmax, mmax)
+    dimension var (mmax)
+    save
+    
+    write (*, *) 'writing fitting output file'
+    if (iterate) then
+       write (22, '(/,1x,t2,a,t28,i3,t32,a)') 'convergence reached after', &
+            iteration, ' iterations.'
+       if (iprovar) then
+          write (22, '(1x,t2,a)') &
+               'convergence criterion is a change in every variable by less than or'
+          write (22, '(1x,t2,a,t11,1pe9.3,t21,a)') &
+               'equal to ', provar, 'times the differential parameters.'
+          write (22, '(1x,t2,a,t26,1pe10.4,t36,a,//)') 'final value of chisq is', &
+               chisq, '.'
+       else
+          write (22, '(1x,t2,a,t58,1pe10.4,t68,a)') &
+               'convergence criterion is a change in chisq by less than', delchi, &
+               ' for two'
+          write (22, '(1x,t2,a,t50,1pe10.4,t60,a)') &
+               'successive iterations.  final value of chisq is', chisq, '.'
+       end if
+       write (22, '(/,1x,t2,a,t8,1pe10.4,t18,a,/)') 'rms = ', rms, '.'
+       write (22, '(1x,t32,a,/)') 'final parameters'
+       write (22, '(1x,t2,a)') &
+            'parameter    initial value    final value      std. deviation'
+       do i = 1, nvaried
+          j = lista (i)
+          if (weight) then
+             write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
+                  var (j), rms * sqrt (covar (i, i) * float (npoints) / &
+                  float (npoints - nvaried))
+          else
+             write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
+                  var (j), rms * sqrt (covar (i, i) * float (npoints) / &
+                  float (npoints - nvaried))
+          end if
+       end do
+       write (22, '(/,1x,t31,a)') 'correlation matrix'
+       do i = 1, nvaried
+          write (22, '(/,1x,12(2x,f8.5))') (correl (i, j), j = 1, i)
+       end do
+    end if
+    
+    if (write_spec) then
+       if (write_fit) write (*, *) 'writing spectrum output file'
+       do i = 1, npoints
+          write (24, '(f10.5, 1p3e13.5)') pos (i), spec (i), fit (i), spec (i) - &
+               fit (i)
+       end do
+    end if
+    
+    return
+  end subroutine write_output
 
-   subroutine super_gauss (np, x, y, hw, sh, as, yc)
-
-     ! Convolves input spectrum with Super Gaussian slit function of specified hw1e, !
-     ! shape factor and asymmetric factor (half-width at 1/e intensity).
-     ! For evenly-spaced spectra!!!
-     IMPLICIT NONE
-     
-     ! Input variables
-     INTEGER*4, INTENT(IN) :: np !Number of points
-     REAL*8, INTENT(IN) :: hw, sh, as !HW1E, SHAPE, ASYM
-     REAL*8, INTENT(IN), DIMENSION(1:np) :: x, y ! Wavelengths, spectrum
-
-     ! Output variables
-     REAL*8, INTENT(OUT), DIMENSION(1:np) :: yc ! Convolved spectrum
-
-     ! Local variables
-     INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
-     INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
-     REAL*8, DIMENSION(1:nslit) :: slit
-     REAL*8, DIMENSION(1:3*np) :: ytemp
-     REAL*8, DIMENSION(1:np) :: ycc
-     REAL*8 :: delpos, slitsum, slit0, wvl
-
-     ! If there is no HW1E then no convolution to be done
-     if (hw .eq. 0) then
-        write (*, *) ' no gaussian convolution applied.'
-        yc = y
-        return
-     end if
-     
-     ! ------------------------------------------------------------------
-     ! Temporary input spectrum mirroed at the ends to ensure convolution
-     ! ------------------------------------------------------------------
-     ytemp(np+1:2*np) = y(1:np)
-     do i = 1, np
-        ytemp(np+1-i) = y(i)
-        ytemp(2*np+i) = y(np+1-i)
-     end DO
-
-     ! Work out spacinf of input spectrum
-     delpos = x(2) - x(1)
-     
-     ! Apply slit function convolution.
-     ! Calculate slit function values out to 0.001 times x0 value, normalize so that
-     ! sum = 1.
-     slitsum = 1.d0
-     nhalf = nslit / 2
-     slit = 0.d0
-     slit(nhalf) = 1.d0
-     getslit: do i = 1, nhalf-1
-        ! Right branch
-        wvl = delpos * i
-        slit(nhalf+i) = EXP(-(ABS( wvl / ( hw ) ) )**sh) ! + sign(REAL(1,KIND=8),wvl) * as ) ) )**sh)
-        ! Left branch
-        slit(nhalf-i) = EXP(-(ABS( wvl / ( hw ) ) )**sh) !+ sign(REAL(1,KIND=8),-wvl) * as ) ) )**sh)
-        ns = i
-        if (slit (nhalf+i) / slit(nhalf) .le. 0.001) exit getslit
-     end do getslit
-     slitsum = SUM(slit(nhalf-ns:nhalf+ns))
-     ! Normalize
-     do i = nhalf-ns, nhalf+ns
-        slit (i) = slit (i) / slitsum
-     end do
-
-     ! Convolve spectrum, reflect at endpoints.
-     do i = 1, np
-
-        ! ------------------------------------------------------
-        ! Starting index of spectrum contributing to convolution
-        ! ------------------------------------------------------
-        ss = np+i-ns
-        ! ----------------
-        ! Safe convolution
-        ! ----------------
-        yc(i) = dot_product(slit(nhalf-ns:nhalf+ns), ytemp(ss:ss+2*ns))
-     end do     
-     return
-   end subroutine super_gauss
-
-
-subroutine gauss (pos, spec, specmod, npoints, hw1e)
-
-! Convolves input spectrum with Gaussian slit function of specified hw1e
-! (half-width at 1/e intensity). For evenly-spaced spectra.
-
-implicit real*8 (a - h, o - z)
-parameter (maxkpno = 100000)
-dimension pos (maxkpno), spec (maxkpno)
-dimension specmod (maxkpno), slit (maxkpno)
-save
-
-if (hw1e .eq. 0) then
-  write (*, *) ' no gaussian convolution applied.'
-  specmod = spec
-  return
-end if
-
-emult = - 1.d0 / (hw1e**2)
-delpos = pos (2) - pos (1)
-
-! Apply slit function convolution.
-! Calculate slit function values out to 0.001 times x0 value, normalize so that
-! sum = 1.
-slitsum = 1.d0
-slit0 = 1.d0
-do i = 1, 1000
-  slit (i) = exp (emult * (delpos * i)**2)
-  slitsum = slitsum + 2.d0 * slit (i)
-  if (slit (i) / slit0 .le. 0.001) then
-    nslit = i
-!   write (*, *) ' nslit = ', nslit
-    go to 40
-  end if
-end do
-40 continue
-slit0 = slit0 / slitsum
-  do i = 1, nslit
-    slit (i) = slit (i) / slitsum
-  end do
-
-! Convolve spectrum, reflect at endpoints.
-do i = 1, npoints
-  specmod (i) = slit0 * spec (i)
-  do j = 1, nslit
-    nlo = i - j
-    nhi = i + j
-    if (nlo .le. 0) nlo = - nlo + 1
-    if (nhi .gt. npoints) nhi = 2 * npoints - nhi
-    specmod (i) = specmod (i) + slit (j) * (spec (nlo) + spec (nhi))
-  end do
-end do
-
-! This legacy code corrects for nlo = 0. Not currently needed, but might be with
-! another compiler.
-! do i = 1, npoints
-!   specmod (i) = slit0 * spec (i)
-!   do j = 1, nslit
-!     nlo = i - j
-!     nhi = i + j
-!     if (nlo .lt. 0) nlo = - nlo
-!     if (nhi .gt. npoints) nhi = 2 * npoints - nhi
-!     if (nlo .ne. 0) then
-!       specmod (i) = specmod (i) + slit (j) * (spec (nlo) + spec (nhi))
-!     else
-!       specmod (i) = specmod (i) + slit (j) * spec (nhi)
-!     end if
-!   end do
-! end do
-
-return
-end subroutine gauss
-!
-subroutine gauss_uneven (pos, spec, specmod, npoints, hw1e)
-
-! Convolves input spectrum with Gaussian slit function of specified hw1e
-! (half-width at 1/e intensity). For unevenly-spaced spectra. Does not treat
-! spectral end-points carefully: we usually have at least several nanometers of
-! margin so this is not an issue.
-
-implicit real*8 (a - h, o - z)
-parameter (maxkpno = 7000)
-dimension pos (maxkpno), spec (maxkpno), specmod (maxkpno), temp (maxkpno)
-specmod = 0.d0
-temp = 0.d0
-
-if (hw1e .eq. 0) then
-  write (*, *) ' no gaussian convolution applied.'
-  specmod = spec
-  return
-end if
-
-emult = - 1.d0 / (hw1e**2)
-
-do i = 1, npoints
-  sum = 0.d0
-  do j = 1, npoints
-    slit = dexp (emult * (pos (j) - pos (i))**2)
-    temp (j) = spec (i) * slit
-    sum = sum + slit
-  end do
-  specmod = specmod + temp / sum
-end do
-
-return
-end subroutine gauss_uneven
-
-   subroutine spline(x, y, n, y2)
-     ! Cubic spline derivative calculation from Numerical Recipes. Modified to always
-     ! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
-     IMPLICIT NONE
-
-     ! Input variables
-     INTEGER*4, INTENT(IN) :: n
-     REAL*8, INTENT(IN), DIMENSION(1:n) :: x, y
-
-     ! Output variables
-     REAL*8, INTENT(INOUT), DIMENSION(1:n) :: y2
-
-     ! Local variables
-     REAL*8, DIMENSION(1:n) :: u
-     REAL*8 :: sig, p, qn, un
-     INTEGER*4 :: i, k
-     
-     y2 (1) = 0.
-     u (1) = 0.
-     do i = 2, n - 1
-        sig = (x (i) - x (i - 1)) / (x (i + 1) - x (i - 1))
-        p = sig * y2 (i - 1) + 2.
-        y2 (i) = (sig - 1.) / p
-        u (i) = (6. * ((y (i + 1) - y (i)) / (x (i + 1) - x (i)) - (y (i) - &
-             y (i - 1)) / (x (i) - x (i - 1))) / (x (i + 1) - x (i - 1)) - sig * &
-             u (i - 1)) / p
-     end do
-     qn = 0.
-     un = 0.
-     y2 (n) = (un - qn * u (n - 1)) / (qn * y2 (n - 1) + 1.)
-     do k = n - 1, 1, -1
-        y2 (k) = y2 (k) * y2 (k + 1) + u (k)
-     end do
-
-     return
-   end subroutine spline
-
-   subroutine splint (xa, ya, y2a, n, np, x, y)
-     ! Cubic spline interpolation from Numerical Recipes, using results of
-     ! subroutine spline.
-
-     IMPLICIT NONE
-     ! Input variables
-     INTEGER*4, INTENT(IN) :: n, np
-     REAL*8, INTENT(IN), DIMENSION(1:n) :: xa, ya, y2a
-     REAL*8, INTENT(IN), DIMENSION(1:np) :: x
-
-     ! Ouput variables
-     REAL*8, INTENT(OUT), DIMENSION(1:np) :: y
-
-     ! Local variables
-     INTEGER*4 :: i, k, klo, khi
-     REAL*8 :: h, a, b
-
-     do i = 1, np
-        klo = 1
-        khi = n
-        do while (khi - klo .gt. 1)
-           k = (khi + klo) / 2
-           if (xa (k) .gt. x (i)) then
-              khi = k
-           else
-              klo = k
-           end if
-        end do
-        h = xa (khi) - xa (klo)
-        if (h .eq. 0.) print*, 'bad xa input.'
-        a = (xa (khi) - x (i)) / h
-        b = (x (i) - xa (klo)) / h
-        y (i) = a * ya (klo) + b * ya (khi) + ((a**3 - a) * y2a (klo) + (b**3 - b) * &
-             y2a (khi)) * (h**2) / 6.
-     end do
-     
-     return
-   end subroutine splint
-
-   subroutine undersample (wav, nw, underspec, fraction)
-
-     ! Convolves input spectrum with Gaussian slit function of specified HW1e (half-
-     ! width at 1/e of maximum intensity), and samples at a particular input phase to
-     ! give the undersampling spectrum, that is, the correction for not Nyquist
-     ! sampling the spectra (see Applied Optics 44, 1296-1304, 2005 for more detail).
-     ! This version calculates both phases of the undersampling spectrum, phase1 -
-     ! i.e., underspec (1, i) - being the more common in radiance spectra. "KPNO"
-     ! data means the high spectral resolution solar reference spectrum (now, most
-     ! usually, a portion of the SAO2010 Solar Irradiance Reference Spectrum,
-     ! available at http://www.cfa.harvard.edu/atmosphere/).
-     IMPLICIT NONE
-     
-     ! Input variables
-     INTEGER*4, INTENT(in) :: nw
-     REAL*8, INTENT(in) :: fraction
-     REAL*8, INTENT(in), DIMENSION(1:nw) :: wav
-
-     ! Output variable
-     REAL*8, INTENT(out), DIMENSION(2,1:nw) :: underspec
-
-     ! Local variables
-     INTEGER*4 :: i
-     REAL*8, DIMENSION(1:nw) :: resample, wav2, over, under
-     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2spec, d2res
-
-     ! The high resolution spectrum is already in memory (nkppos, kppos, kpspec
-     ! and convolved kpspec_gauss)
-     
-     ! Allocate variables for interpolation
-     ALLOCATE(d2spec(1:nkppos),d2res(1:nw))
-
-     ! Phase1 calculation: Calculate spline derivatives for KPNO data.
-     call spline (kppos, kpspec_gauss, nkppos, d2spec)
-     ! Calculate solar spectrum at radiance positions
-     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, resample)
-     ! Calculate spline derivatives for resampled data.
-     call spline (wav, resample, nw, d2res)
-
-     ! Calculate solar spectrum at radiance + phase positions, original and
-     ! resampled.
-     wav2 (1) = wav (1)
-     do i = 2, nw
-        wav2 (i) = (1.d0 - fraction) * wav (i - 1) + fraction * wav (i)
-     end do
-
-     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav2, over)
-     call splint (wav, resample, d2res, nw, nw, wav2, under)
-     do i = 1, nw
-        underspec (1, i) = over (i) - under (i)
-        resample (i) = over (i)
-     end do
-     
-     ! Phase2 calculation: Calculate spline derivatives for KPNO data.
-     ! Calculate spline derivatives for resampled data.
-     call spline (wav2, resample, nw, d2res)
-     ! Calculate solar spectrum at radiance positions, original and resampled.
-     call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, over)
-     call splint (wav2, resample, d2res, nw, nw, wav, under)
-     ! Calculate undersample spectrum
-     do i = 1, nw
-        underspec (2, i) = over (i) - under (i)
-     end do
-     do i = 1, nw
-        write(13,*) wav(i), underspec(1:2,i)
-     end do
-     
-     ! Deallocate interpolation variables
-     DEALLOCATE(d2spec,d2res)
-     
-     return
-   end subroutine undersample
-
-subroutine dataspline (wav, nwav, database, wrt_scr)
-
-! Opens reference spectrum files.
-! Convolves reference spectra with supplied slit width if requested.
-! Samples reference spectra to standard grid determined from wavelength
-! calibration of a radiance spectrum.
-! Loads spectra into the database file.
-
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 7000)
-parameter (maxkpno = 7000)
-
-! Input spectra.
-dimension xring (maxkpno), yring (maxkpno), deriv2ring (maxkpno)
-dimension xgas1 (maxkpno), ygas1 (maxkpno), deriv2gas1 (maxkpno)
-dimension xgas2 (maxkpno), ygas2 (maxkpno), deriv2gas2 (maxkpno)
-dimension xgas3 (maxkpno), ygas3 (maxkpno), deriv2gas3 (maxkpno)
-dimension xgas4 (maxkpno), ygas4 (maxkpno), deriv2gas4 (maxkpno)
-dimension xgas5 (maxkpno), ygas5 (maxkpno), deriv2gas5 (maxkpno)
-dimension xgas6 (maxkpno), ygas6 (maxkpno), deriv2gas6 (maxkpno)
-dimension xcom (maxkpno), ycom (maxkpno), deriv2com (maxkpno)
-dimension xtemp (maxkpno), ytemp (maxkpno)
-
-! Spectrum arrays.
-dimension wav (maxpts), database (11, maxpts)
-dimension temp1 (maxpts), temp2 (maxpts), temp3 (maxpts), temp4 (maxpts), &
-  temp5 (maxpts), temp6 (maxpts), temp7 (maxpts), temp8 (maxpts)
-character*120 :: spec1, spec2, spec3, spec4, spec5, spec6, spec7, spec8
-
-! Convolution switches.
-logical :: if_conv_ring, if_conv_gas1, if_conv_gas2, if_conv_gas3, if_conv_gas4, &
-  if_conv_gas5, if_conv_gas6, if_conv_com
-
-! Verbose mode.
-logical wrt_scr
-
-! Edlen 1966 standard air parameters. Gas6 is normally O2-O2, which used to
-! require air-vacuum correction. Parameters saved here just in case.
-parameter (c1 = 1.0000834213d0)
-parameter (c2 = 2.406030d-2)
-parameter (c3 = 130.d0)
-parameter (c4 = 1.5997d-4)
-parameter (c5 = 38.9d0)
-
-save
-
-! Open reference spectrum files.
-if (wrt_scr) write (*, '(5x, a)') 'enter input Ring spectrum'
-read (*, '(a)') spec1
-read (*, *) ring_mult, if_conv_ring, hw1e_ring
-if (wrt_scr) write (*, '(5x, a)') 'enter gas1 spectrum'
-read (*, '(a)') spec2
-read (*, *) gas1_mult, if_conv_gas1, hw1e_gas1
-if (wrt_scr) write (*, '(5x, a)') 'enter gas2 spectrum'
-read (*, '(a)') spec3
-read (*, *) gas2_mult, if_conv_gas2, hw1e_gas2
-if (wrt_scr) write (*, '(5x, a)') 'enter gas3 spectrum'
-read (*, '(a)') spec4
-read (*, *) gas3_mult, if_conv_gas3, hw1e_gas3
-if (wrt_scr) write (*, '(5x, a)') 'enter gas4 spectrum'
-read (*, '(a)') spec5
-read (*, *) gas4_mult, if_conv_gas4, hw1e_gas4
-if (wrt_scr) write (*, '(5x, a)') 'enter gas5 spectrum'
-read (*, '(a)') spec6
-read (*, *) gas5_mult, if_conv_gas5, hw1e_gas5
-if (wrt_scr) write (*, '(5x, a)') 'enter gas6 spectrum'
-read (*, '(a)') spec7
-read (*, *) gas6_mult, if_conv_gas6, hw1e_gas6
-if (wrt_scr) write (*, '(5x, a)') 'enter common mode spectrum'
-read (*, '(a)') spec8
-read (*, *) com_mult, if_conv_com, hw1e_com
-
-open (unit = 11, file = spec1, status = 'old')
-open (unit = 12, file = spec2, status = 'old')
-open (unit = 13, file = spec3, status = 'old')
-open (unit = 14, file = spec4, status = 'old')
-open (unit = 15, file = spec5, status = 'old')
-open (unit = 16, file = spec6, status = 'old')
-open (unit = 17, file = spec7, status = 'old')
-open (unit = 18, file = spec8, status = 'old')
-
-! Convolve and spline Ring spectrum.
-i = 1
-20 read (11, *, end = 30) xring (i), yring (i)
-  yring (i) = yring (i) * ring_mult
-  i = i + 1
-  go to 20
-30 npoints = i - 1
-if (if_conv_ring) then
-  call gauss_uneven (xring, yring, ytemp, npoints, hw1e_ring)
-  yring = ytemp
-end if
-if (xring (npoints) .lt. xring (1)) then
-  do i = 1, npoints
-    xtemp (i) = xring (i)
-    ytemp (i) = yring (i)
-  end do
-  do i = 1, npoints
-    xring (i) = xtemp (npoints + 1 - i)
-    yring (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xring, yring, npoints, deriv2ring)
-call splint (xring, yring, deriv2ring, npoints, nwav, wav, temp1)
-
-! Convolve and spline gas1 spectrum.
-i = 1
-40 read (12, *, end = 50) xgas1 (i), ygas1 (i)
-  ygas1 (i) = ygas1 (i) * gas1_mult
-  i = i + 1
-  go to 40
-50 npoints = i - 1
-if (if_conv_gas1) then
-  call gauss_uneven (xgas1, ygas1, ytemp, npoints, hw1e_gas1)
-  ygas1 = ytemp
-end if
-if (xgas1 (npoints) .lt. xgas1 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas1 (i)
-    ytemp (i) = ygas1 (i)
-  end do
-  do i = 1, npoints
-    xgas1 (i) = xtemp (npoints + 1 - i)
-    ygas1 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas1, ygas1, npoints, deriv2gas1)
-call splint (xgas1, ygas1, deriv2gas1, npoints, nwav, wav, temp2)
-
-! Convolve and spline gas2 spectrum.
-i = 1
-60 read (13, *, end = 70) xgas2 (i), ygas2 (i)
-  ygas2 (i) = ygas2 (i) * gas2_mult
-  i = i + 1
-  go to 60
-70 npoints = i - 1
-if (if_conv_gas2) then
-  call gauss_uneven (xgas2, ygas2, ytemp, npoints, hw1e_gas2)
-  ygas2 = ytemp
-end if
-if (xgas2 (npoints) .lt. xgas2 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas2 (i)
-    ytemp (i) = ygas2 (i)
-  end do
-  do i = 1, npoints
-    xgas2 (i) = xtemp (npoints + 1 - i)
-    ygas2 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas2, ygas2, npoints, deriv2gas2)
-call splint (xgas2, ygas2, deriv2gas2, npoints, nwav, wav, temp3)
-
-! Convolve and spline gas3 spectrum.
-i = 1
-80 read (14, *, end = 90) xgas3 (i), ygas3 (i)
-  ygas3 (i) = ygas3 (i) * gas3_mult
-  i = i + 1
-  go to 80
-90 npoints = i - 1
-if (if_conv_gas3) then
-  call gauss_uneven (xgas3, ygas3, ytemp, npoints, hw1e_gas3)
-  ygas3 = ytemp
-end if
-if (xgas3 (npoints) .lt. xgas3 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas3 (i)
-    ytemp (i) = ygas3 (i)
-  end do
-  do i = 1, npoints
-    xgas3 (i) = xtemp (npoints + 1 - i)
-    ygas3 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas3, ygas3, npoints, deriv2gas3)
-call splint (xgas3, ygas3, deriv2gas3, npoints, nwav, wav, temp4)
-
-! Convolve and spline gas4 spectrum.
-i = 1
-100 read (15, *, end = 110) xgas4 (i), ygas4 (i)
-  ygas4 (i) = ygas4 (i) * gas4_mult
-  i = i + 1
-  go to 100
-110 npoints = i - 1
-if (if_conv_gas4) then
-  call gauss_uneven (xgas4, ygas4, ytemp, npoints, hw1e_gas4)
-  ygas4 = ytemp
-end if
-if (xgas4 (npoints) .lt. xgas4 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas4 (i)
-    ytemp (i) = ygas4 (i)
-  end do
-  do i = 1, npoints
-    xgas4 (i) = xtemp (npoints + 1 - i)
-    ygas4 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas4, ygas4, npoints, deriv2gas4)
-call splint (xgas4, ygas4, deriv2gas4, npoints, nwav, wav, temp5)
-
-! Convolve and spline gas5 spectrum.
-i = 1
-120 read (16, *, end = 130) xgas5 (i), ygas5 (i)
-  ygas5 (i) = ygas5 (i) * gas5_mult
-  i = i + 1
-  go to 120
-130 npoints = i - 1
-if (if_conv_gas5) then
-  call gauss_uneven (xgas5, ygas5, ytemp, npoints, hw1e_gas5)
-  ygas5 = ytemp
-end if
-if (xgas5 (npoints) .lt. xgas5 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas5 (i)
-    ytemp (i) = ygas5 (i)
-  end do
-  do i = 1, npoints
-    xgas5 (i) = xtemp (npoints + 1 - i)
-    ygas5 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas5, ygas5, npoints, deriv2gas5)
-call splint (xgas5, ygas5, deriv2gas5, npoints, nwav, wav, temp6)
-
-! Convolve and spline gas6 spectrum. Previously multiplied by 1.d40; another
-! 1.d5 here.
-i = 1
-140 read (17, *, end = 150) xgas6 (i), ygas6 (i)
-  ygas6 (i) = ygas6 (i) * gas6_mult
-!! correct to vacuum wavelength
-!  sigsq = 1.d6 / (xgas6 (i) * xgas6 (i))
-!  rindex = c1 + c2 /(c3 - sigsq) + c4 / (c5 - sigsq)
-!  wvac = xgas6 (i) * rindex
-!! iterate once
-!  sigsq = 1.d6 / (wvac * wvac)
-!  rindex = c1 + c2 /(c3 - sigsq) + c4 / (c5 - sigsq)
-!  xgas6 (i) = xgas6 (i) * rindex
-  i = i + 1
-  go to 140
-150 npoints = i - 1
-if (if_conv_gas6) then
-  call gauss_uneven (xgas6, ygas6, ytemp, npoints, hw1e_gas6)
-  ygas6 = ytemp
-end if
-if (xgas6 (npoints) .lt. xgas6 (1)) then
-  do i = 1, npoints
-    xtemp (i) = xgas6 (i)
-    ytemp (i) = ygas6 (i)
-  end do
-  do i = 1, npoints
-    xgas6 (i) = xtemp (npoints + 1 - i)
-    ygas6 (i) = ytemp (npoints + 1 - i)
-  end do
-end if
-call spline (xgas6, ygas6, npoints, deriv2gas6)
-call splint (xgas6, ygas6, deriv2gas6, npoints, nwav, wav, temp7)
-
-! Convolve and spline common mode spectrum if it is far off in wavelength grid.
-! If it is not far off, use the original grid.
-i = 1
-160 read (18, *, end = 170) xcom (i), ycom (i)
-  ycom (i) = ycom (i) * com_mult
-  i = i + 1
-  go to 160
-170 npoints = i - 1
-if (if_conv_com) then
-  call gauss_uneven (xcom, ycom, ytemp, npoints, hw1e_com)
-  ycom = ytemp
-end if
-if (abs (xcom (1) - wav (1)) .le. 0.02 .and. npoints .eq. nwav) then
-  do i = 1, npoints
-    temp8 (i) = ycom (i)
-  end do
-else
-  if (xcom (npoints) .lt. xcom (1)) then
-    do i = 1, npoints
-      xtemp (i) = xcom (i)
-      ytemp (i) = ycom (i)
+  subroutine super_gauss (np, x, y, hw, sh, as, yc)
+    
+    ! Convolves input spectrum with Super Gaussian slit function of specified hw1e, !
+    ! shape factor and asymmetric factor (half-width at 1/e intensity).
+    ! For evenly-spaced spectra!!!
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: np !Number of points
+    REAL*8, INTENT(IN) :: hw, sh, as !HW1E, SHAPE, ASYM
+    REAL*8, INTENT(IN), DIMENSION(1:np) :: x, y ! Wavelengths, spectrum
+    
+    ! Output variables
+    REAL*8, INTENT(OUT), DIMENSION(1:np) :: yc ! Convolved spectrum
+    
+    ! Local variables
+    INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
+    INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
+    REAL*8, DIMENSION(1:nslit) :: slit
+    REAL*8, DIMENSION(1:3*np) :: ytemp
+    REAL*8, DIMENSION(1:np) :: ycc
+    REAL*8 :: delpos, slitsum, wvl
+    
+    ! If there is no HW1E then no convolution to be done
+    if (hw .eq. 0) then
+       write (*, *) ' no gaussian convolution applied.'
+       yc = y
+       return
+    end if
+    
+    ! ------------------------------------------------------------------
+    ! Temporary input spectrum mirroed at the ends to ensure convolution
+    ! ------------------------------------------------------------------
+    ytemp(np+1:2*np) = y(1:np)
+    do i = 1, np
+       ytemp(np+1-i) = y(i)
+       ytemp(2*np+i) = y(np+1-i)
+    end DO
+    
+    ! Work out spacing of input spectrum
+    delpos = x(2) - x(1)
+    
+    ! Apply slit function convolution.
+    ! Calculate slit function values out to 0.001 times x0 value, normalize so that
+    ! sum = 1.
+    slitsum = 1.d0
+    nhalf = nslit / 2
+    slit = 0.d0
+    slit(nhalf) = 1.d0
+    getslit: do i = 1, nhalf-1
+       ! Right branch
+       wvl = delpos * i
+       slit(nhalf+i) = EXP(-(ABS( wvl / ( hw + sign(REAL(1,KIND=8),wvl) * as ) ) )**sh)
+       ! Left branch
+       slit(nhalf-i) = EXP(-(ABS( wvl / ( hw + sign(REAL(1,KIND=8),-wvl) * as ) ) )**sh)
+       ns = i
+       if (slit (nhalf+i) / slit(nhalf) .le. 0.001) exit getslit
+    end do getslit
+    slitsum = SUM(slit(nhalf-ns:nhalf+ns))
+    ! Normalize
+    do i = nhalf-ns, nhalf+ns
+       slit (i) = slit (i) / slitsum
     end do
-    do i = 1, npoints
-      xcom (i) = xtemp (npoints + 1 - i)
-      ycom (i) = ytemp (npoints + 1 - i)
+    
+    ! Convolve spectrum, reflect at endpoints.
+    do i = 1, np
+       
+       ! ------------------------------------------------------
+       ! Starting index of spectrum contributing to convolution
+       ! ------------------------------------------------------
+       ss = np+i-ns
+       ! ----------------
+       ! Safe convolution
+       ! ----------------
+       yc(i) = dot_product(slit(nhalf-ns:nhalf+ns), ytemp(ss:ss+2*ns))
     end do
-  end if
-  call spline (xcom, ycom, npoints, deriv2com)
-  call splint (xcom, ycom, deriv2com, npoints, nwav, wav, temp8)
-end if
-
-! Load results into the database file. Note ordering of spectra:
-! 1 = Irradiance
-! 2 = Ring
-! 3 = gas1
-! 4 = gas2
-! 5 = gas3
-! 6 = gas4
-! 7 = gas5
-! 8 = gas6
-! 9 = Undersampling, phase 1
-! 10 = Undersampling, phase 2
-! 11 = Common mode
-do i = 1, nwav
-  database (2, i) = temp1 (i)
-  database (3, i) = temp2 (i)
-  database (4, i) = temp3 (i)
-  database (5, i) = temp4 (i)
-  database (6, i) = temp5 (i)
-  database (7, i) = temp6 (i)
-  database (8, i) = temp7 (i)
-  database (11, i) = temp8 (i)
-end do
-
-close (unit = 11)
-close (unit = 12)
-close (unit = 13)
-close (unit = 14)
-close (unit = 15)
-close (unit = 16)
-close (unit = 17)
-close (unit = 18)
-
-return
-end subroutine dataspline
-!
-subroutine lfit (x, y, ndata, a, lista, covar, chisq)
-
-! Linear least-squares fitting, from Numerical Recipes.
-
-implicit real*8 (a - h, o - z)
-parameter (maxpts = 7000)
-dimension x (maxpts), y (maxpts), a (4), lista (4), covar (4, 4), beta (4), &
-  afunc (4), index (4)
-save
-
-! Dimension for the exact number of parameters:
-ncvm = 4
-mfit = 4
-ma = 4
-
-kk = mfit + 1
-do j = 1, ma
-  ihit = 0
-  do k = 1, mfit
-    if (lista (k) .eq. j) ihit = ihit + 1
-  end do
-  if (ihit .eq. 0) then
-    lista (kk) = j
-    kk = kk + 1
-  else if (ihit .gt. 1) then
-    print*, 'improper set in lista'
-  end if
-end do
-if (kk .ne. (ma + 1)) print*, 'improper set in lista'
-do j = 1, mfit
-  do k = 1, mfit
-    covar (j, k) = 0.
-  end do
-  beta (j) = 0.
-end do
-do i = 1,ndata
-  afunc (1) = 1.
-  afunc (2) = x (i)
-  afunc (3) = x (i)**2
-  afunc (4) = x (i)**3
-  ym = y (i)
-  if(mfit .lt. ma) then
-    do j = mfit + 1, ma
-      ym = ym - a (lista (j)) * afunc (lista (j))
-    end do
-  end if
-  do j = 1, mfit
-    wt = afunc (lista (j))
-    do k = 1, j
-      covar (j, k) = covar (j, k) + wt * afunc (lista (k))
-    end do
-    beta(j) = beta(j) + ym * wt
-  end do
-end do
-if (mfit .gt. 1) then
-  do j = 2, mfit
-    do k = 1, j - 1
-      covar (k, j) = covar (j, k)
-    end do
-  end do
-end if
-call ludcmp (covar, mfit, ncvm, index, even)
-call lubksb (covar, mfit, ncvm, index, beta)
-do j = 1, mfit
-  a (lista (j)) = beta (j)
-end do
-chisq = 0.
-do i = 1, ndata
-  afunc (1) = 1.
-  afunc (2) = x (i)
-  afunc (3) = x (i)**2
-  afunc (4) = x (i)**3
-  sum = 0.
-  do j = 1, ma
-    sum = sum + a(j) * afunc (j)
-  end do
-  chisq = chisq + (y (i) - sum)**2
-end do
-
-return
-end subroutine lfit
-!
-subroutine ludcmp (a, n, np, indx, d)
-
-! LU decomposition, from Numerical Recipes.
-  IMPLICIT NONE
+    return
+  end subroutine super_gauss
   
-  ! Input variables
-  INTEGER*4, INTENT(IN) :: n, np
- 
-  ! Modified variables
-  REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
-  REAL*8, INTENT(INOUT) :: d
-  INTEGER*4, INTENT(INOUT), DIMENSION(1:np) :: indx
-
-  ! Local variables
-  REAL*8, PARAMETER :: tiny = 1.0d-20
-  REAL*8, DIMENSION(1:n) :: vv 
-  REAL*8 :: aamax, sum, dum
-  INTEGER*4 :: i, j, k, imax
-  d = 1.
-
-  do i = 1, n
-     aamax = 0.d0
-     do j = 1, n
-        if (abs (a (i, j)) .gt. aamax) aamax = abs (a (i, j))
-     end do
-     if (aamax .eq. 0.) print*, 'singular matrix.'
-     vv (i) = 1.d0 / aamax
-  end do
-  do j = 1, n
-     if (j .gt. 1) then
-        do i = 1, j - 1
-           sum = a (i, j)
-           if (i .gt. 1)then
-              do k = 1, i - 1
-                 sum = sum - a (i, k) * a (k, j)
-              end do
-              a (i, j) = sum
-           end if
-        end do
-     end if
-     aamax = 0.d0
-     do i = j, n
-        sum = a (i, j)
-        if (j .gt. 1)then
-           do k = 1, j - 1
-              sum = sum - a (i, k) * a (k, j)
-           end do
-           a (i, j) = sum
-        end if
-        dum = vv (i) * abs (sum)
-        if (dum .ge. aamax) then
-           imax = i
-           aamax = dum
-        end if
-     end do
-     if (j .ne. imax) then
-        do k = 1, n
-           dum = a (imax, k)
-           a (imax, k) = a (j, k)
-           a (j, k) = dum
-        end do
-        d = -d
-        vv (imax) = vv (j)
-     end if
-     indx (j) = imax
-     if (j .ne. n) then
-        if (a (j, j) .eq. 0.) a (j, j) = tiny
-        dum = 1.d0 / a (j, j)
-        do i = j + 1, n
-           a (i, j) = a (i, j) * dum
-        end do
-     end if
-  end do
-  if (a (n, n) .eq. 0.) a (n, n) = tiny
+  subroutine super_gauss_uneven (np, x, y, hw, sh, as, yc)
+    
+    ! Convolves input spectrum with Super Gaussian slit function of specified hw1e,
+    ! shape factor and asymmetric factor (half-width at 1/e intensity).
+    ! For non evenly-spaced spectra!!!
+    IMPLICIT NONE
+     
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: np !Number of points
+    REAL*8, INTENT(IN) :: hw, sh, as !HW1E, SHAPE, ASYM
+    REAL*8, INTENT(IN), DIMENSION(1:np) :: x, y ! Wavelengths, spectrum
+    
+    ! Output variables
+    REAL*8, INTENT(OUT), DIMENSION(1:np) :: yc ! Convolved spectrum
+    
+    ! Local variables
+    INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
+    INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
+    REAL*8, DIMENSION(1:nslit) :: slit
+    REAL*8, DIMENSION(1:3*np) :: ytemp, xtemp
+    REAL*8, DIMENSION(1:np) :: ycc
+    REAL*8 :: delpos, slitsum, wvl1, wvl2
+    
+    ! If there is no HW1E then no convolution to be done
+    if (hw .eq. 0) then
+       write (*, *) ' no gaussian convolution applied.'
+       yc = y
+       return
+    end if
+    
+    ! ------------------------------------------------------------------
+    ! Temporary input spectrum mirroed at the ends to ensure convolution
+    ! ------------------------------------------------------------------
+    ytemp(np+1:2*np) = y(1:np)
+    xtemp(np+1:2*np) = x(1:np)
+    do i = 1, np-1
+       ytemp(np+1-i) = y(i)
+       ytemp(2*np+i) = y(np-i)
+       delpos = xtemp(np+i)-xtemp(np+i+1)
+       xtemp(np+1-i) = xtemp(np+2-i)+delpos
+       delpos = xtemp(2*np+1-i)-xtemp(2*np-i)
+       xtemp(2*np+i) = xtemp(2*np+i-1)+delpos
+    end DO
+    
+    ! Convolve spectrum, reflect at endpoints.
+    do i = 1, np
+       
+       ! For each point work out the slit function
+       ! Calculate slit function values out to 0.001 times x0 value, normalize so that
+       ! sum = 1.
+       nhalf = nslit / 2
+       slit = 0.d0
+       slit(nhalf) = 1.d0
+       getslit: do j = 1, nhalf-1
+          ! Right branch
+          wvl1 = x(i)-xtemp(np+i+j)
+          slit(nhalf+j) = EXP(-(ABS( wvl1 / ( hw + sign(REAL(1,KIND=8),wvl1) * as ) ) )**sh)
+          ! Left branch
+          wvl2 = x(i)-xtemp(np+i-j)
+          slit(nhalf-j) = EXP(-(ABS( wvl2 / ( hw + sign(REAL(1,KIND=8),wvl2) * as ) ) )**sh)
+          ns = j
+          if (slit (nhalf+j) / slit(nhalf) .le. 0.001) exit getslit
+       end do getslit
+       slitsum = SUM(slit(nhalf-ns:nhalf+ns))
+       ! Normalize
+       do j = nhalf-ns, nhalf+ns
+          slit (j) = slit (j) / slitsum
+       end do
+       
+       ! ------------------------------------------------------
+       ! Starting index of spectrum contributing to convolution
+       ! ------------------------------------------------------
+       ss = np+i-ns
+       ! ----------------
+       ! Safe convolution
+       ! ----------------
+       yc(i) = dot_product(slit(nhalf-ns:nhalf+ns), ytemp(ss:ss+2*ns))
+    end do
+    return
+  end subroutine super_gauss_uneven
   
-  return
-end subroutine ludcmp
-!
-subroutine lubksb (a, n, np, indx, b)
+  subroutine spline(x, y, n, y2)
+    ! Cubic spline derivative calculation from Numerical Recipes. Modified to always
+    ! use "natural" boundary conditions (2nd derivatives = 0 at boundaries).
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: n
+    REAL*8, INTENT(IN), DIMENSION(1:n) :: x, y
+    
+    ! Output variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:n) :: y2
+    
+    ! Local variables
+    REAL*8, DIMENSION(1:n) :: u
+    REAL*8 :: sig, p, qn, un
+    INTEGER*4 :: i, k
+    
+    y2 (1) = 0.
+    u (1) = 0.
+    do i = 2, n - 1
+       sig = (x (i) - x (i - 1)) / (x (i + 1) - x (i - 1))
+       p = sig * y2 (i - 1) + 2.
+       y2 (i) = (sig - 1.) / p
+       u (i) = (6. * ((y (i + 1) - y (i)) / (x (i + 1) - x (i)) - (y (i) - &
+            y (i - 1)) / (x (i) - x (i - 1))) / (x (i + 1) - x (i - 1)) - sig * &
+            u (i - 1)) / p
+    end do
+    qn = 0.
+    un = 0.
+    y2 (n) = (un - qn * u (n - 1)) / (qn * y2 (n - 1) + 1.)
+    do k = n - 1, 1, -1
+       y2 (k) = y2 (k) * y2 (k + 1) + u (k)
+    end do
+    
+    return
+  end subroutine spline
+  
+  subroutine splint (xa, ya, y2a, n, np, x, y)
+    ! Cubic spline interpolation from Numerical Recipes, using results of
+    ! subroutine spline.
+    
+    IMPLICIT NONE
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: n, np
+    REAL*8, INTENT(IN), DIMENSION(1:n) :: xa, ya, y2a
+    REAL*8, INTENT(IN), DIMENSION(1:np) :: x
+    
+    ! Ouput variables
+    REAL*8, INTENT(OUT), DIMENSION(1:np) :: y
+    
+    ! Local variables
+    INTEGER*4 :: i, k, klo, khi
+    REAL*8 :: h, a, b
+    
+    do i = 1, np
+       klo = 1
+       khi = n
+       do while (khi - klo .gt. 1)
+          k = (khi + klo) / 2
+          if (xa (k) .gt. x (i)) then
+             khi = k
+          else
+             klo = k
+          end if
+       end do
+       h = xa (khi) - xa (klo)
+       if (h .eq. 0.) print*, 'bad xa input.'
+       a = (xa (khi) - x (i)) / h
+       b = (x (i) - xa (klo)) / h
+       y (i) = a * ya (klo) + b * ya (khi) + ((a**3 - a) * y2a (klo) + (b**3 - b) * &
+            y2a (khi)) * (h**2) / 6.
+    end do
+    
+    return
+  end subroutine splint
+  
+  subroutine undersample (wav, nw, underspec, fraction)
+    
+    ! Convolves input spectrum with Gaussian slit function of specified HW1e (half-
+    ! width at 1/e of maximum intensity), and samples at a particular input phase to
+    ! give the undersampling spectrum, that is, the correction for not Nyquist
+    ! sampling the spectra (see Applied Optics 44, 1296-1304, 2005 for more detail).
+    ! This version calculates both phases of the undersampling spectrum, phase1 -
+    ! i.e., underspec (1, i) - being the more common in radiance spectra. "KPNO"
+    ! data means the high spectral resolution solar reference spectrum (now, most
+    ! usually, a portion of the SAO2010 Solar Irradiance Reference Spectrum,
+    ! available at http://www.cfa.harvard.edu/atmosphere/).
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(in) :: nw
+    REAL*8, INTENT(in) :: fraction
+    REAL*8, INTENT(in), DIMENSION(1:nw) :: wav
+    
+    ! Output variable
+    REAL*8, INTENT(out), DIMENSION(2,1:nw) :: underspec
+    
+    ! Local variables
+    INTEGER*4 :: i
+    REAL*8, DIMENSION(1:nw) :: resample, wav2, over, under
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: d2spec, d2res
+    
+    ! The high resolution spectrum is already in memory (nkppos, kppos, kpspec
+    ! and convolved kpspec_gauss)
+    
+    ! Allocate variables for interpolation
+    ALLOCATE(d2spec(1:nkppos),d2res(1:nw))
+    
+    ! Phase1 calculation: Calculate spline derivatives for KPNO data.
+    call spline (kppos, kpspec_gauss, nkppos, d2spec)
+    ! Calculate solar spectrum at radiance positions
+    call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, resample)
+    ! Calculate spline derivatives for resampled data.
+    call spline (wav, resample, nw, d2res)
+    
+    ! Calculate solar spectrum at radiance + phase positions, original and
+    ! resampled.
+    wav2 (1) = wav (1)
+    do i = 2, nw
+       wav2 (i) = (1.d0 - fraction) * wav (i - 1) + fraction * wav (i)
+    end do
+    
+    call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav2, over)
+    call splint (wav, resample, d2res, nw, nw, wav2, under)
+    do i = 1, nw
+       underspec (1, i) = over (i) - under (i)
+       resample (i) = over (i)
+    end do
+    
+    ! Phase2 calculation: Calculate spline derivatives for KPNO data.
+    ! Calculate spline derivatives for resampled data.
+    call spline (wav2, resample, nw, d2res)
+    ! Calculate solar spectrum at radiance positions, original and resampled.
+    call splint (kppos, kpspec_gauss, d2spec, nkppos, nw, wav, over)
+    call splint (wav2, resample, d2res, nw, nw, wav, under)
+    ! Calculate undersample spectrum
+    do i = 1, nw
+       underspec (2, i) = over (i) - under (i)
+    end do
+    
+    ! Deallocate interpolation variables
+    DEALLOCATE(d2spec,d2res)
+    
+    return
+  end subroutine undersample
+  
+  subroutine dataspline (wav, nwav, hw, sh, as)
 
-  ! LU forward- and back-substitution, from Numerical Recipes.
-  IMPLICIT NONE
+    ! Opens reference spectrum files.
+    ! Convolves reference spectra with supplied slit width if requested.
+    ! Samples reference spectra to standard grid determined from wavelength
+    ! calibration of a radiance spectrum.
+    ! Loads spectra into the database file.
+    
+    ! Local variables
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: nwav
+    REAL*8, INTENT(IN) :: hw, sh, as
+    REAL*8, INTENT(IN), DIMENSION(1:nwav) :: wav
+    
+    ! Local variables
+    INTEGER*4 :: i, j, np
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: x, y,yc,yt,der2spl
+    
+    ! Loop over fitting variables
+    do i = 1, npars
+       ! Only process those parameters with cross-section files
+       If ( (par_str(i)   .eq. ad1_str .or. par_str(i) .eq. ad2_str .or. par_str(i) .eq. ble_str) .and. &
+            (par_names(i) .ne. us1_str .and. par_names(i) .ne. us2_str) ) THEN
+          ! Open file
+          OPEN(unit=11, file=TRIM(par_names(i)), status='old')
+          ! Find number of points
+          np=0
+          do
+             read(11,*,END=11)
+             np=np+1
+          end do
+11        rewind(unit=11)
+          ! Log message
+          if (wrt_scr) write(*,'(A,I5,A)') 'Reading file... '//TRIM(par_names(i))//'  with ',np,' points'
+          ! Allocate variable to hold wavlengths and spectrum
+          ALLOCATE(x(1:np),y(1:np),yc(1:np),der2spl(1:np),yt(1:nwav))
+          ! Read wavelengths and spectrum
+          DO j = 1, np
+             READ(11,*) x(j), y(j)
+          END DO
+          ! Convolve and spline spectrum
+          call super_gauss_uneven(np,x,y,hw,sh,as,yc)
+          call spline (x, yc, np, der2spl)
+          call splint (x, yc, der2spl, np, nwav, wav, yt)
+          
+          ! Save cross section in reference spectrum
+          database (i,1:nwav) = yt(1:nwav)
+          
+          ! Deallocate variables
+          DEALLOCATE(x,y,yc,der2spl,yt)
+          CLOSE(11)
+       END If
+    end do
+    
+    return
+  end subroutine dataspline
 
-  ! Input variables
-  INTEGER*4, INTENT(IN) :: n, np
+  subroutine ludcmp (a, n, np, indx, d)
+    
+    ! LU decomposition, from Numerical Recipes.
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: n, np
+    
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
+    REAL*8, INTENT(INOUT) :: d
+    INTEGER*4, INTENT(INOUT), DIMENSION(1:np) :: indx
+    
+    ! Local variables
+    REAL*8, PARAMETER :: tiny = 1.0d-20
+    REAL*8, DIMENSION(1:n) :: vv 
+    REAL*8 :: aamax, sum, dum
+    INTEGER*4 :: i, j, k, imax
+    d = 1.
+    
+    do i = 1, n
+       aamax = 0.d0
+       do j = 1, n
+          if (abs (a (i, j)) .gt. aamax) aamax = abs (a (i, j))
+       end do
+       if (aamax .eq. 0.) print*, 'singular matrix.'
+       vv (i) = 1.d0 / aamax
+    end do
+    do j = 1, n
+       if (j .gt. 1) then
+          do i = 1, j - 1
+             sum = a (i, j)
+             if (i .gt. 1)then
+                do k = 1, i - 1
+                   sum = sum - a (i, k) * a (k, j)
+                end do
+                a (i, j) = sum
+             end if
+          end do
+       end if
+       aamax = 0.d0
+       do i = j, n
+          sum = a (i, j)
+          if (j .gt. 1)then
+             do k = 1, j - 1
+                sum = sum - a (i, k) * a (k, j)
+             end do
+             a (i, j) = sum
+          end if
+          dum = vv (i) * abs (sum)
+          if (dum .ge. aamax) then
+             imax = i
+             aamax = dum
+          end if
+       end do
+       if (j .ne. imax) then
+          do k = 1, n
+             dum = a (imax, k)
+             a (imax, k) = a (j, k)
+             a (j, k) = dum
+          end do
+          d = -d
+          vv (imax) = vv (j)
+       end if
+       indx (j) = imax
+       if (j .ne. n) then
+          if (a (j, j) .eq. 0.) a (j, j) = tiny
+          dum = 1.d0 / a (j, j)
+          do i = j + 1, n
+             a (i, j) = a (i, j) * dum
+          end do
+       end if
+    end do
+    if (a (n, n) .eq. 0.) a (n, n) = tiny
+    
+    return
+  end subroutine ludcmp
+  
+  subroutine lubksb (a, n, np, indx, b)
 
-  ! Modified variables
-  REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
-  REAL*8, INTENT(INOUT), DIMENSION(1:n) :: b
-  INTEGER*4, INTENT(INOUT), DIMENSION(1:n) :: indx
-
-  ! Local variables
-  REAL*8 :: sum
-  INTEGER*4 :: ii, i, ll, j
-
-  ii = 0
-  do i = 1, n
-     ll = indx (i)
-     sum = b (ll)
-     b (ll) = b (i)
-     if (ii .ne. 0) then
-        do j = ii, i - 1
-           sum = sum-a (i, j) * b (j)
-        end do
-     else if (sum .ne. 0.) then
-        ii = i
-     end if
-     b (i) = sum
-  end do
-  do i = n, 1, -1
-     sum = b (i)
-     if (i .lt. n) then
-        do j = i + 1, n
-           sum = sum - a (i, j) * b (j)
-        end do
-     end if
-     b (i) = sum / a (i, i)
-  end do
-
-  return
-end subroutine lubksb
-
-
+    ! LU forward- and back-substitution, from Numerical Recipes.
+    IMPLICIT NONE
+    
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: n, np
+    
+    ! Modified variables
+    REAL*8, INTENT(INOUT), DIMENSION(1:np,1:np) :: a
+    REAL*8, INTENT(INOUT), DIMENSION(1:n) :: b
+    INTEGER*4, INTENT(INOUT), DIMENSION(1:n) :: indx
+    
+    ! Local variables
+    REAL*8 :: sum
+    INTEGER*4 :: ii, i, ll, j
+    
+    ii = 0
+    do i = 1, n
+       ll = indx (i)
+       sum = b (ll)
+       b (ll) = b (i)
+       if (ii .ne. 0) then
+          do j = ii, i - 1
+             sum = sum-a (i, j) * b (j)
+          end do
+       else if (sum .ne. 0.) then
+          ii = i
+       end if
+       b (i) = sum
+    end do
+    do i = n, 1, -1
+       sum = b (i)
+       if (i .lt. n) then
+          do j = i + 1, n
+             sum = sum - a (i, j) * b (j)
+          end do
+       end if
+       b (i) = sum / a (i, i)
+    end do
+    
+    return
+  end subroutine lubksb
+  
 END MODULE GASFIT_MODULE
 
 SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvaried, &
-     avg, diff, ntype, database)
+     avg, diff, ntype)
 
   USE gasfit_module, ONLY: spectrum
 
@@ -2215,7 +1841,6 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
   ! Modified variables
   REAL*8, INTENT(INOUT), DIMENSION(1:npoints) :: ymod
   REAL*8, INTENT(INOUT), DIMENSION(1:npars,1:npoints) :: dyda
-  REAL*8, INTENT(INOUT), DIMENSION(11,1:npoints) :: database
   
   ! Local variables
   INTEGER*4 :: i, j
@@ -2224,7 +1849,7 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
   REAL*8, DIMENSION(1:npars) :: vars0
 
   ! Calculate the spectrum.
-  call spectrum (npoints, npars, avg, pos, ymod, vars, fac, str, ntype, database)
+  call spectrum (npoints, npars, avg, pos, ymod, vars, fac, str, ntype)
 
   ! Calculate the derivatives by finite differences. dyplus is y (var + finite
   ! difference in variable)
@@ -2232,7 +1857,7 @@ SUBROUTINE funcs (pos, npoints, vars, fac, str, ymod, dyda, npars, lista, nvarie
   do i = 1, nvaried
      var0 = vars0 (lista (i))
      vars0 (lista (i)) = vars0 (lista (i)) + diff (lista (i))
-     call spectrum (npoints, npars, avg, pos, dyplus, vars0, fac, str, ntype, database)
+     call spectrum (npoints, npars, avg, pos, dyplus, vars0, fac, str, ntype)
      do j = 1, npoints
         dyda (lista (i), j) = (dyplus (j) - ymod (j)) / diff (lista (i))
      end do
