@@ -77,7 +77,7 @@ CONTAINS
     ! December 30, 2010
 
     IMPLICIT NONE
-    LOGICAL :: iprovar
+    LOGICAL :: iprovar, first_solar=.true.
     REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
@@ -316,6 +316,27 @@ CONTAINS
        sig_sun(i) = 1.d30
        if (i .ge. ll_sun .and. i .le. lu_sun) sig_sun(i) = 1.d0
     end do
+
+    ! Renormalize, if requested
+    if (renorm) then
+       remult = 0.d0
+       if (weight_sun) then
+          sigsum = 0.d0
+          do j = 1, npoints
+             remult = remult + spec_sun(j) / (sig_sun(j) * sig_sun(j))
+             sigsum = sigsum + 1.d0 / (sig_sun(j) * sig_sun(j))
+          end do
+          remult = remult / sigsum
+       else
+          do j = 1, npoints
+             remult = remult + spec_sun(j)
+          end do
+          remult = remult / npoints
+       end if
+       do j = 1, npoints
+          spec_sun(j) = spec_sun(j) / remult
+       end do
+    end if
     
     ! Write out the input line and other input information.
     IF (write_fit) WRITE (22, '(a)') inputline
@@ -436,11 +457,6 @@ CONTAINS
     ! Calculate the splined fitting database. Note that the undersampled
     ! spectrum has just been done. Finish filling in reference database array.
     call dataspline (pos_sun(1:npoints), npoints, hw1e, shap, asym)
-
-    ! Deallocate variables
-    DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
-         init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
-         kpspec_gauss)
     
     ! ----------------------------------------------------------------- !
     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
@@ -547,6 +563,50 @@ CONTAINS
              end do
              avg = asum / ssum
           end if
+
+          ! First do a solar fit to check that shift and hw1e are
+          ! consistent during the day and with original solar fit.
+          ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
+          ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
+               fit(1:npoints))
+          correl = 0.0d0; covar=0.0d0; fit=0.0d0
+          ! Re-initialize solar fitting variables
+          if (first_solar) var_sun(1:n_solar_pars) = init_sun(1:n_solar_pars)
+          ! Perform fit
+          iprovar = .false.
+          call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
+            avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
+            fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
+            var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
+            iprovar, 1)
+          first_solar = .false.
+          print*, npix, iprovar, iteration
+          ! Deallocate variables needed for solar fitting
+          DEALLOCATE(correl, covar, fit)  
+
+          write(13,'(I4,1x,2(a,1x,1pE11.3))') npix,'Shift: ',var_sun(nshi), ' HW1E: ',var_sun(nhwe)
+
+          ! Second spectral fit with optical absorptions
+          iprovar = .false.
+          if (iterate_rad) then
+             if (.not. update_pars) then
+                if (wrt_scr) write (*, *) ' updating parameters'
+                do j = 1, npars
+                   var (j) = initial (j)
+                end do
+             end if
+          
+             !   BOAS fitting now done here.
+             ALLOCATE(correl(1:npars,1:npars),covar(1:npars,1:npars), &
+                  fit(1:npoints))
+             correl = 0.0d0; covar=0.0d0; fit=0.0d0
+             call specfit (npoints, npars, nvaried, list_rad(1:n_solar_pars), &
+                  avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
+                  fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
+                  par_str(1:npars), iprovar, 2)
+             DEALLOCATE(correl, covar, fit)  
+          end if
+
        else 
 
           if (wrt_scr) write(*,'(a,I5)') 'Skipping pixel # ',npix
@@ -557,26 +617,16 @@ CONTAINS
           ! Cycle this skipped pixel
           cycle
        end if     
-
+       stop
     END DO radfit
 50  continue
+    ! Deallocate variables
+    DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
+         init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
+         kpspec_gauss)
     DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
          pos_rad, spec_rad, sig_rad)
     stop
-
-!!$       iprovar = .false.
-!!$       if (iterate_rad) then
-!!$          if (.not. update_pars) then
-!!$             if (wrt_scr) write (*, *) ' updating parameters'
-!!$             do j = 1, npars
-!!$                var (j) = initial (j)
-!!$             end do
-!!$          end if
-!!$          
-!!$          !   BOAS fitting now done here.
-!!$    call specfit (npoints, npars, nvaried, list_rad, iteration, avg, &
-!!$      spec, pos, sig, fit, var, chisq, delchi, diff, correl, covar, rms, &
-!!$      provar, iprovar, wrt_scr, 4)
 
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
@@ -663,7 +713,8 @@ CONTAINS
   END SUBROUTINE GASFIT
 
   SUBROUTINE specfit (np, npars, nvaried, lista, avg, &
-       spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, ntype)
+       spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, &
+       ntype)
     ! Driver for Levenberg-Marquardt nonlinear least squares minimization.
     
     IMPLICIT NONE
@@ -780,7 +831,7 @@ CONTAINS
     ! the calculation type and initializing the fitting reference database.
     ! ntype = 1: Solar wavelength calibration. Open kpnospec, the high spectral
     ! resolution irradiance reference spectrum.
-    ! ntype /= 1: Later radiance fits (refspec already filled).
+    ! ntype /= 1: Later radiance fits
     IMPLICIT NONE
 
     ! Input variables
@@ -833,13 +884,19 @@ CONTAINS
     ! Calculate the spectrum: First do the shift and squeeze. Shift var (nshi),
     ! squeeze by 1 + var (nsqe); do in absolute sense, to make it easy to back-convert
     ! radiance data.
-    do i = 1, nkppos
-       if (ntype .eq. 1) then
+    if (ntype .eq. 1) then
+       do i = 1, nkppos
           kppos_ss(i) = kppos(i) * (1.d0 + var(nsqe)) + var(nshi)
-       else
+       end do
+    else
+       sunpos(1:npoints) = pos(1:npoints)
+       sunspec(1:npoints) = database(1,1:npoints)
+       do i = 1, npoints
           sunpos_ss(i) = sunpos(i) * (1.d0 + var(nsqe)) + var(nshi)
-       end if
-    end do
+          print*, sunpos(i), sunpos_ss(i), sunspec(i)
+       end do
+       stop
+    end if
     
     ! Broadening and re-sampling of solar spectrum.
     if (ntype .eq. 1) then
@@ -994,6 +1051,8 @@ CONTAINS
           end do
        end do
        DEALLOCATE(atry,da,beta,alpha,covar0)
+       ! Get it ready for next solar fit
+       first_call = .true.
        return       
     end if
 
