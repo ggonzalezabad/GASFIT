@@ -77,7 +77,7 @@ CONTAINS
     ! December 30, 2010
 
     IMPLICIT NONE
-    LOGICAL :: iprovar, first_solar=.true.
+    LOGICAL :: iprovar
     REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
@@ -92,8 +92,8 @@ CONTAINS
          lat, lon, sza, saa, vza, vaa
     
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-         j, nfirst, ngas, nrads, npix, npixfit, cld, year, month, day, &
-         hour, minu, sec
+         j, nfirst, ngas, nrads, npix, npixf, npixfgs, npixfgr, &
+         cld, year, month, day, hour, minu, sec
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
@@ -279,6 +279,7 @@ CONTAINS
           if (i .eq. nreport) ngas = nvaried
        end if
     end do
+    
     if (wrt_scr) write (*, *) 'nvaried  =', nvaried
     if (wrt_scr) write (*, *) 'Max. sza =', szamax
     if (wrt_scr) write (*, *) 'Min. sza =', szamin
@@ -362,85 +363,82 @@ CONTAINS
     ! from lack of change in the variables, iprovar, is set to .false. before
     ! iteration begins.
     iprovar = .false.
-    if (iterate_sun) then
     
-       ! Use strings to assign specific fitting parameter indices
+    ! Use strings to assign specific fitting parameter indices
+    do i = 1, n_solar_pars
+       IF (sun_par_str(i) .EQ. alb_str) nalb = i 
+       IF (sun_par_str(i) .EQ. hwe_str) nhwe = i 
+       IF (sun_par_str(i) .EQ. shi_str) nshi = i 
+       IF (sun_par_str(i) .EQ. sqe_str) nsqe = i 
+       IF (sun_par_str(i) .EQ. sha_str) nsha = i 
+       IF (sun_par_str(i) .EQ. asy_str) nasy = i 
+    end do
+    
+    ! Automatic difference-taking
+    if (autodiff) then
        do i = 1, n_solar_pars
-          IF (sun_par_str(i) .EQ. alb_str) nalb = i 
-          IF (sun_par_str(i) .EQ. hwe_str) nhwe = i 
-          IF (sun_par_str(i) .EQ. shi_str) nshi = i 
-          IF (sun_par_str(i) .EQ. sqe_str) nsqe = i 
-          IF (sun_par_str(i) .EQ. sha_str) nsha = i 
-          IF (sun_par_str(i) .EQ. asy_str) nasy = i 
+          if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
        end do
-       
-       ! Automatic difference-taking
-       if (autodiff) then
-          do i = 1, n_solar_pars
-             if (if_var_sun(i)) diffsun(i) = ABS(automult * var_sun(i))
-          end do
+    end if
+    
+    ! Order the parameters for mrqmin (housekeeping for the fitting process) and
+    ! save the initial values of the parameters, in case they are required at some
+    ! later stage. At present, just used in writing the fitting output file.
+    nvar_sun = 0
+    do i = 1, n_solar_pars
+       init_sun (i) = var_sun (i)
+       if (if_var_sun (i)) then
+          nvar_sun = nvar_sun + 1
+          list_sun (nvar_sun) = i
        end if
-       
-       ! Order the parameters for mrqmin (housekeeping for the fitting process) and
-       ! save the initial values of the parameters, in case they are required at some
-       ! later stage. At present, just used in writing the fitting output file.
-       nvar_sun = 0
-       do i = 1, n_solar_pars
-          init_sun (i) = var_sun (i)
-          if (if_var_sun (i)) then
-             nvar_sun = nvar_sun + 1
-             list_sun (nvar_sun) = i
-          end if
-       end do
-       if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
-       
-       ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
-       ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-            fit(1:npoints),database(npars+4,1:npoints))
-       correl = 0.0d0; covar=0.0d0; fit=0.0d0; database = 0.0d0
+    end do
+    if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
+    
+    ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
+    ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
+         fit(1:npoints),database(npars+4,1:npoints))
+    correl = 0.0d0; covar=0.0d0; fit=0.0d0; database = 0.0d0
 
-       ! Perform fit
-       call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
-            avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
-            fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
-            var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
-            iprovar, 1)
-
-       ! Shift and squeeze solar spectrum.
-       shift = var_sun(nshi); squeeze = var_sun(nsqe)
-       do i = 1, npoints
-          pos_sun(i) = (pos_sun(i) - var_sun(nshi)) / (1.d0 + var_sun(nsqe))
-       end do
-       dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
-            float (npoints - nvar_sun))
-       write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
-       write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
-       write (*, *) 'nvar_sun = ', nvar_sun
-              
-       ! Set slit function parameters for later use in undersampling correction. 
-       ! HW1E means the gaussian half-width at 1/e of the maximum intensity.
-       hw1e = var_sun(nhwe); shap = var_sun(nsha); asym = var_sun(nasy)
-       dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
-            float (npoints - nvar_sun))
-       dshap = rms * sqrt (covar (nsha, nsha) * float (npoints) / &
-            float (npoints - nvar_sun))
-       dasym = rms * sqrt (covar (nasy, nasy) * float (npoints) / &
-            float (npoints - nvar_sun))
-       write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
-       write (*, '(a, 1p2e14.6)') 'irrad: shap, 1 sigma = ', shap, dshap
-       write (*, '(a, 1p2e14.6)') 'irrad: asym, 1 sigma = ', asym, dasym
-
-       ! Deallocate variables needed for fitting
-       DEALLOCATE(correl, covar, fit)  
-
-    end if ! on iterate_sun
-    write (*, *) 'finished with iterate_sun'
-
+    ! Perform fit
+    call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
+         avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
+         fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
+         var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
+         iprovar, 1)
+    
+    ! Shift and squeeze solar spectrum.
+    shift = var_sun(nshi); squeeze = var_sun(nsqe)
+    do i = 1, npoints
+       pos_sun(i) = (pos_sun(i) - var_sun(nshi)) / (1.d0 + var_sun(nsqe))
+    end do
+    dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
+         float (npoints - nvar_sun))
+    write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
+    write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
+    write (*, *) 'nvar_sun = ', nvar_sun
+    
+    ! Set slit function parameters for later use in undersampling correction. 
+    ! HW1E means the gaussian half-width at 1/e of the maximum intensity.
+    hw1e = var_sun(nhwe); shap = var_sun(nsha); asym = var_sun(nasy)
+    dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
+         float (npoints - nvar_sun))
+    dshap = rms * sqrt (covar (nsha, nsha) * float (npoints) / &
+         float (npoints - nvar_sun))
+    dasym = rms * sqrt (covar (nasy, nasy) * float (npoints) / &
+         float (npoints - nvar_sun))
+    write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
+    write (*, '(a, 1p2e14.6)') 'irrad: shap, 1 sigma = ', shap, dshap
+    write (*, '(a, 1p2e14.6)') 'irrad: asym, 1 sigma = ', asym, dasym
+    
+    ! Deallocate variables needed for fitting
+    DEALLOCATE(correl, covar, fit)  
+    write (*, *) 'finished with Solar calibration'
+ 
     ! Finish building database of reference spectra
     ! Calculate the undersampled spectrum.
     ALLOCATE(underspec(1:2,1:npoints))
     call undersample (pos_sun(1:npoints), npoints, underspec, phase)
-
+    
     ! Save solar spectrum and undersampling spectrum in to database
     ! Sun
     database(1,1:npoints) = spec_sun(1:npoints)
@@ -453,7 +451,7 @@ CONTAINS
        END IF
     END DO
     DEALLOCATE(underspec)
-
+    
     ! Calculate the splined fitting database. Note that the undersampled
     ! spectrum has just been done. Finish filling in reference database array.
     call dataspline (pos_sun(1:npoints), npoints, hw1e, shap, asym)
@@ -464,8 +462,8 @@ CONTAINS
     ! ----------------------------------------------------------------- !
     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
     ! Initialize number of radiance pixels & number of radiance pixel fitted
-    npix = 0; npixfit = 0
-
+    npix = 0; npixf = 0; npixfgs = 0; npixfgr = 0
+    
     ! Initialize several diagnostics.
     ! rmsavg: average fitting rms.
     ! davg: average fitting uncertainty for reported parameter.
@@ -475,16 +473,16 @@ CONTAINS
     davg = 0.d0
     drelavg = 0.d0
     dshiftavg = 0.d0
-
+    
     ! Allocate general fitting variables
     ALLOCATE(pos_rad(1:npoints),spec_rad(1:npoints),sig_rad(1:npoints))
-
+    
     ! Add the weighting, in the single array.
     do i = 1, npoints
        sig_rad(i) = 1.d30
        if (i .ge. ll_rad .and. i .le. lu_rad) sig_rad(i) = 1.d0
     end do
-
+    
     ! Radiance loop
     radfit: DO 
        ! Read the measured spectra.
@@ -521,6 +519,7 @@ CONTAINS
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
           if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
+          write(*,'(1x,a,i4)') 'Processing pixel ', npix
 
           ! If the pixel is to be processed read the radiance and save it in the right
           ! variables
@@ -528,8 +527,8 @@ CONTAINS
              read (23, *) pos_rad(j), spec_rad(j)
              spec_rad(j) = spec_rad(j) / div_rad
           end do
-          npixfit = npixfit + 1
-       
+
+          npixf = npixf + 1
           ! Renormalize, if requested
           if (renorm) then
              remult = 0.d0
@@ -563,31 +562,31 @@ CONTAINS
              end do
              avg = asum / ssum
           end if
-
-          ! First do a solar fit to check that shift and hw1e are
-          ! consistent during the day and with original solar fit.
-          ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
-          ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-               fit(1:npoints))
-          correl = 0.0d0; covar=0.0d0; fit=0.0d0
-          ! Re-initialize solar fitting variables
-          if (first_solar) var_sun(1:n_solar_pars) = init_sun(1:n_solar_pars)
-          ! Perform fit
-          iprovar = .false.
-          call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
-            avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
-            fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
-            var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
-            iprovar, 1)
-          first_solar = .false.
-          print*, npix, iprovar, iteration
-          ! Deallocate variables needed for solar fitting
-          DEALLOCATE(correl, covar, fit)  
-
-          write(13,'(I4,1x,2(a,1x,1pE11.3))') npix,'Shift: ',var_sun(nshi), ' HW1E: ',var_sun(nhwe)
+          
+          if (iterate_sun) then
+             ! First do a solar fit to check that shift and hw1e are
+             ! consistent during the day and with original solar fit.
+             ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
+             ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
+                  fit(1:npoints))
+             correl = 0.0d0; covar=0.0d0; fit=0.0d0
+             ! Re-initialize solar fitting variables
+             var_sun(1:n_solar_pars) = init_sun(1:n_solar_pars)
+             ! Perform fit
+             iprovar = .false.
+             call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
+                  avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
+                  fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
+                  var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
+                  iprovar, 1)
+             if (iprovar) npixfgs = npixfgs + 1
+             ! Deallocate variables needed for solar fitting
+             DEALLOCATE(correl, covar, fit)  
+             write(13,'(I4,1x,L,1x,2(a,1x,1pE11.3))') npix, iprovar, &
+                  'Shift: ',var_sun(nshi), ' HW1E: ',var_sun(nhwe)
+          end if
 
           ! Second spectral fit with optical absorptions
-          iprovar = .false.
           if (iterate_rad) then
              if (.not. update_pars) then
                 if (wrt_scr) write (*, *) ' updating parameters'
@@ -600,11 +599,15 @@ CONTAINS
              ALLOCATE(correl(1:npars,1:npars),covar(1:npars,1:npars), &
                   fit(1:npoints))
              correl = 0.0d0; covar=0.0d0; fit=0.0d0
-             call specfit (npoints, npars, nvaried, list_rad(1:n_solar_pars), &
+             iprovar = .false.
+             call specfit (npoints, npars, nvaried, list_rad(1:npars), &
                   avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
                   fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
                   par_str(1:npars), iprovar, 2)
+             if (iprovar) npixfgr = npixfgr + 1
              DEALLOCATE(correl, covar, fit)  
+             write(13,'(I4,1x,L,1x,2(a,1x,1pE11.3))') npix, iprovar, 'Shift: ',var(nrshi), &
+                  ' alb: ',var(nralb)
           end if
 
        else 
@@ -616,10 +619,14 @@ CONTAINS
           end do
           ! Cycle this skipped pixel
           cycle
+
        end if     
-       stop
+
     END DO radfit
+
 50  continue
+    print*, npix, npixf, npixfgs, npixfgr
+
     ! Deallocate variables
     DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
          init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
@@ -712,7 +719,7 @@ CONTAINS
     
   END SUBROUTINE GASFIT
 
-  SUBROUTINE specfit (np, npars, nvaried, lista, avg, &
+  SUBROUTINE specfit (np, npars, nvar, lista, avg, &
        spec, pos, sig, fit_spec, var, diff, fac, str, iprovar, &
        ntype)
     ! Driver for Levenberg-Marquardt nonlinear least squares minimization.
@@ -720,7 +727,7 @@ CONTAINS
     IMPLICIT NONE
     
     ! Input variables
-    INTEGER*4, INTENT(IN) :: np, npars, nvaried, ntype
+    INTEGER*4, INTENT(IN) :: np, npars, nvar, ntype
     REAL*8, INTENT(IN) :: avg
     REAL*8, INTENT(IN), DIMENSION(1:np) :: spec, pos, sig
     REAL*8, INTENT(IN), DIMENSION(1:npars) :: diff, fac
@@ -738,13 +745,12 @@ CONTAINS
     REAL*8 :: alamda, ochisq, difftest, prop, rsum
     REAL*8, DIMENSION(1:npars) :: var0
     INTEGER*4 :: itest, i, j    
-    external funcs
     
     alamda = - 1
     ! First call to minimization routine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
-         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-         funcs, alamda, avg, diff(1:npars), ntype)
+         fac(1:npars), str(1:npars), npars, lista(1:npars), nvar, &
+         alamda, avg, diff(1:npars), ntype)
     iteration = 1
     itest = 0
 
@@ -761,16 +767,21 @@ CONTAINS
        end if
       
        iteration = iteration + 1
+       ! Exit with iprovar = .false. if iteration > itermax
+       if (iteration .gt. 30) then
+          iprovar = .false.
+          exit iter_loop
+       end if
        ochisq = chisq
-       do i = 1, nvaried
+       do i = 1, nvar
           var0 (lista (i)) = var (lista (i))
        end do
        ! Iteration over the minimization
        call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
-            fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-            funcs, alamda, avg, diff(1:npars), ntype)
+            fac(1:npars), str(1:npars), npars, lista(1:npars), nvar, &
+            alamda, avg, diff(1:npars), ntype)
 
-       do i = 1, nvaried
+       do i = 1, nvar
           prop = abs (var0 (lista (i)) - var (lista (i)))
           difftest = provar * diff (lista (i))
           ! Check iteration conditions to finish loop
@@ -784,12 +795,12 @@ CONTAINS
        end do
     END DO iter_loop
 
-    if (wrt_scr) write (*, '(1x, a)') 'iprovar = .true.'
+    if (wrt_scr) write (*, '(1x, a,L)') 'iprovar = ', iprovar
     alamda = 0.0    
     ! Final call to minimization subroutine
     call mrqmin (pos(1:np), spec(1:np), sig(1:np), np, var(1:npars), &
-         fac(1:npars), str(1:npars), npars, lista(1:npars), nvaried, &
-         funcs, alamda, avg, diff(1:npars), ntype)
+         fac(1:npars), str(1:npars), npars, lista(1:npars), nvar, &
+         alamda, avg, diff(1:npars), ntype)
     if (wrt_scr) then
        write (22,'(/1x, a, i2, t18, a, e10.4, t43, a, e9.2)') 'iteration #', &
             iteration, 'chi-squared: ', chisq, 'alamda:', alamda
@@ -802,7 +813,7 @@ CONTAINS
     end if
     
     ! Calculate the correlation matrix.
-    do i = 1, nvaried
+    do i = 1, nvar
        correl (i, i) = 1.
        do j = 1, i
           if (i .ne. j) correl (i, j) = covar (i, j) / sqrt (covar (i, i) * &
@@ -846,7 +857,7 @@ CONTAINS
 
     ! Local variables
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
-    INTEGER*4 :: i, jmax, j
+    INTEGER*4 :: i
     REAL*8 :: hw, sh, as, sun_avg
     REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline, &
          sunpos, sunpos_ss, sunspec, sunspec_ss
@@ -892,10 +903,8 @@ CONTAINS
        sunpos(1:npoints) = pos(1:npoints)
        sunspec(1:npoints) = database(1,1:npoints)
        do i = 1, npoints
-          sunpos_ss(i) = sunpos(i) * (1.d0 + var(nsqe)) + var(nshi)
-          print*, sunpos(i), sunpos_ss(i), sunspec(i)
+          sunpos_ss(i) = sunpos(i) * (1.d0 + var(nrsqe)) + var(nrshi)
        end do
-       stop
     end if
     
     ! Broadening and re-sampling of solar spectrum.
@@ -920,7 +929,12 @@ CONTAINS
 
     ! Add contributions from each  variable
     ! First add albedo contribution
-    fit(1:npoints) = var(nalb) * sunspec_ss(1:npoints)
+    if (ntype .eq. 1) then
+       fit(1:npoints) = var(nalb) * sunspec_ss(1:npoints)
+    else
+       fit(1:npoints) = var(nralb) * sunspec_ss(1:npoints)
+    end if
+
     ! Now loop over the rest of parameters to add BOAS, and polynomial contributions
     ! Initial add-on contributions
     do i = 1, npars
@@ -949,11 +963,21 @@ CONTAINS
     end do
     fit(1:npoints) = fit(1:npoints) + baseline(1:npoints)
     
+!!$    if (ntype .ne. 1) then
+!!$       do i = 1, npoints
+!!$          print*, fit(i)
+!!$       end do
+!!$       do i = 1, npars
+!!$         write(*,'(7(1x,E10.2))') var(i), fac(i), del(1)**fac(i), var(i)*del(1)**fac(i), fit(1), &
+!!$               var(nralb) * sunspec_ss(1), var(nralb)
+!!$       end do
+!!$       stop
+!!$    end if
     return
   end subroutine spectrum
   
   subroutine mrqmin (x, y, sig, ndata, a, fac, str, ma, lista, mfit, &
-       funcs, alamda, avg, diff, ntype)
+       alamda, avg, diff, ntype)
     
     ! Levenberg-Marquardt minimization adapted from Numerical Recipes.
     IMPLICIT NONE
@@ -979,7 +1003,6 @@ CONTAINS
     INTEGER*4 :: j,k,kk,ihit
     INTEGER*4, DIMENSION(1:mfit) :: index
     
-    external funcs
     save ochisq,atry,da,beta,first_call,alpha
 
     if (first_call) then
@@ -1300,10 +1323,9 @@ CONTAINS
     
     ! Local variables
     INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
-    INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
+    INTEGER*4 :: i, ns, nhalf, ss
     REAL*8, DIMENSION(1:nslit) :: slit
     REAL*8, DIMENSION(1:3*np) :: ytemp
-    REAL*8, DIMENSION(1:np) :: ycc
     REAL*8 :: delpos, slitsum, wvl
     
     ! If there is no HW1E then no convolution to be done
@@ -1379,10 +1401,9 @@ CONTAINS
     
     ! Local variables
     INTEGER*4, PARAMETER :: nslit = 1000 ! Number of point in the slit function
-    INTEGER*4 :: i, j, ns, nlo, nhi, nhalf, ss
+    INTEGER*4 :: i, j, ns, nhalf, ss
     REAL*8, DIMENSION(1:nslit) :: slit
     REAL*8, DIMENSION(1:3*np) :: ytemp, xtemp
-    REAL*8, DIMENSION(1:np) :: ycc
     REAL*8 :: delpos, slitsum, wvl1, wvl2
     
     ! If there is no HW1E then no convolution to be done
