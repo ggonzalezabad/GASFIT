@@ -535,6 +535,18 @@ CONTAINS
              end do
           end if
        
+          ! Weight things if needed
+          if (.not. weight_rad) then
+             avg = (pos_rad(npoints) + pos_rad(1)) / 2.
+          else
+             asum = 0.
+             ssum = 0.
+             do j = 1, npoints
+                asum = asum + pos_rad(j) / (sig_rad(j)**2)
+                ssum = ssum + 1. / (sig_rad(j)**2)
+             end do
+             avg = asum / ssum
+          end if
        else 
 
           if (wrt_scr) write(*,'(a,I5)') 'Skipping pixel # ',npix
@@ -550,22 +562,8 @@ CONTAINS
 50  continue
     DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
          pos_rad, spec_rad, sig_rad)
-
-    print*, shift, squeeze
     stop
 
-!!$       
-!!$       if (.not. weight_rad) then
-!!$          avg = (pos (npoints) + pos (1)) / 2.
-!!$       else
-!!$          asum = 0.
-!!$          ssum = 0.
-!!$          do j = 1, npoints
-!!$             asum = asum + pos (j) / (sig (j)**2)
-!!$             ssum = ssum + 1. / (sig (j)**2)
-!!$          end do
-!!$          avg = asum / ssum
-!!$       end if
 !!$       iprovar = .false.
 !!$       if (iterate_rad) then
 !!$          if (.not. update_pars) then
