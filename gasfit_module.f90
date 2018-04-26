@@ -11,6 +11,7 @@ MODULE GASFIT_MODULE
        scp_str='Scp', bsp_str='Bsp', alb_str='ALB', hwe_str='HWE', &
        shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
        us1_str='us1', us2_str='us2'
+  INTEGER*4, PARAMETER :: maxiter = 40
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
@@ -455,7 +456,7 @@ CONTAINS
     ! Calculate the splined fitting database. Note that the undersampled
     ! spectrum has just been done. Finish filling in reference database array.
     call dataspline (pos_sun(1:npoints), npoints, hw1e, shap, asym)
-    
+
     ! ----------------------------------------------------------------- !
     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
     ! Fit the radiances (loop over to only keep one spectrum in memory) !
@@ -519,7 +520,7 @@ CONTAINS
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
           if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
-          write(*,'(1x,a,i4)') 'Processing pixel ', npix
+          write(*,'(1x,a,i4,a,1pE9.3)') 'Processing pixel ', npix,' RMS: ',rms
 
           ! If the pixel is to be processed read the radiance and save it in the right
           ! variables
@@ -583,7 +584,7 @@ CONTAINS
              ! Deallocate variables needed for solar fitting
              DEALLOCATE(correl, covar, fit)  
              write(13,'(I4,1x,L,1x,2(a,1x,1pE11.3))') npix, iprovar, &
-                  'Shift: ',var_sun(nshi), ' HW1E: ',var_sun(nhwe)
+                  'Shift: ',var_sun(nshi), ' RMS: ',rms
           end if
 
           ! Second spectral fit with optical absorptions
@@ -606,8 +607,8 @@ CONTAINS
                   par_str(1:npars), iprovar, 2)
              if (iprovar) npixfgr = npixfgr + 1
              DEALLOCATE(correl, covar, fit)  
-             write(13,'(I4,1x,L,1x,2(a,1x,1pE11.3))') npix, iprovar, 'Shift: ',var(nrshi), &
-                  ' alb: ',var(nralb)
+             write(13,'(I4,1x,L,1x,I4,1x,3(a,1x,1pE11.3))') npix, iprovar, iteration, &
+                  'Shift: ',var(nrshi), ' alb: ',var(nralb), ' rms: ',rms
           end if
 
        else 
@@ -626,6 +627,7 @@ CONTAINS
 
 50  continue
     print*, npix, npixf, npixfgs, npixfgr
+    print*, var(1:npars)
 
     ! Deallocate variables
     DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
@@ -768,7 +770,7 @@ CONTAINS
       
        iteration = iteration + 1
        ! Exit with iprovar = .false. if iteration > itermax
-       if (iteration .gt. 30) then
+       if (iteration .gt. maxiter) then
           iprovar = .false.
           exit iter_loop
        end if
@@ -858,9 +860,11 @@ CONTAINS
     ! Local variables
     INTEGER*4, PARAMETER :: maxpts = 10000, maxkpno = 20000
     INTEGER*4 :: i
+    REAL*8, PARAMETER :: expmax = REAL(MAXEXPONENT(1.0),KIND=8), &
+         expmin = REAL(MINEXPONENT(1.0),KIND=8)
     REAL*8 :: hw, sh, as, sun_avg
     REAL*8, DIMENSION(1:npoints) :: del, scaling, baseline, &
-         sunpos, sunpos_ss, sunspec, sunspec_ss
+         sunpos, sunpos_ss, sunspec, sunspec_ss, sumexp, tmpexp
     REAL*8, ALLOCATABLE, DIMENSION(:) :: d2sun
     CHARACTER*120 :: kpnospec
     LOGICAL :: first_sun=.true.
@@ -941,9 +945,26 @@ CONTAINS
        IF (str(i) .EQ. ad1_str) fit(1:npoints) = fit(1:npoints) + var(i) * database(i,1:npoints)
     end do
     ! Beer's law contributions
+    sumexp(1:npoints) = 0.d0
     do i = 1, npars
-       IF (str(i) .EQ. ble_str) fit(1:npoints) = fit(1:npoints) * dexp(-var(i) * database(i,1:npoints))
+       IF (str(i) .EQ. ble_str) then
+          tmpexp(1:npoints) = 0.0d0; tmpexp(1:npoints) = var(i)*database(i,1:npoints)
+          WHERE (tmpexp(1:npoints) .GT. expmax)
+             tmpexp(1:npoints) = expmax
+          END WHERE
+          WHERE (tmpexp(1:npoints) .LT. expmin)
+             tmpexp(1:npoints) = expmin
+          END WHERE
+          sumexp(1:npoints) = sumexp(1:npoints) - tmpexp(1:npoints)
+       END IF
     end do
+    WHERE (sumexp(1:npoints) .GT. expmax)
+       sumexp(1:npoints) = expmax
+    END WHERE
+    WHERE (sumexp(1:npoints) .LT. expmin)
+       sumexp(1:npoints) = expmin
+    END WHERE
+    fit(1:npoints) = fit(1:npoints) * dexp(sumexp(1:npoints))
     ! Final add-on contributions
     do i = 1, npars
        IF (str(i) .EQ. ad2_str) fit(1:npoints) = fit(1:npoints) + var(i) * database(i,1:npoints)
@@ -964,15 +985,13 @@ CONTAINS
     fit(1:npoints) = fit(1:npoints) + baseline(1:npoints)
     
 !!$    if (ntype .ne. 1) then
-!!$       do i = 1, npoints
-!!$          print*, fit(i)
-!!$       end do
-!!$       do i = 1, npars
-!!$         write(*,'(7(1x,E10.2))') var(i), fac(i), del(1)**fac(i), var(i)*del(1)**fac(i), fit(1), &
-!!$               var(nralb) * sunspec_ss(1), var(nralb)
+!!$       do i = 300, 675
+!!$          write(*,'(9(1pE11.2))') pos(i), fit(i), var(11:12), &
+!!$               dexp(-var(11)*database(11,i)), &
+!!$               dexp(-var(12)*database(12,i)), dexp(sumexp(i)), database(11:12,i)
 !!$       end do
 !!$       stop
-!!$    end if
+!!$    endif
     return
   end subroutine spectrum
   
@@ -1519,6 +1538,11 @@ CONTAINS
     REAL*8 :: h, a, b
     
     do i = 1, np
+       ! If we are out of xa then make it cero
+       if (x(i) .lt. xa(1) .or. x(i) .gt. xa(n)) then
+          y(i) = 0.d0
+          cycle
+       end if
        klo = 1
        khi = n
        do while (khi - klo .gt. 1)
@@ -1651,6 +1675,8 @@ CONTAINS
           ! Read wavelengths and spectrum
           DO j = 1, np
              READ(11,*) x(j), y(j)
+             ! Apply parameter factor             
+             y(j) =  y(j) * var_factor(i)
           END DO
           ! Convolve and spline spectrum
           call super_gauss_uneven(np,x,y,hw,sh,as,yc)
@@ -1659,7 +1685,7 @@ CONTAINS
           
           ! Save cross section in reference spectrum
           database (i,1:nwav) = yt(1:nwav)
-          
+
           ! Deallocate variables
           DEALLOCATE(x,y,yc,der2spl,yt)
           CLOSE(11)
