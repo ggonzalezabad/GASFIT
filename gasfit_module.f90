@@ -1,7 +1,8 @@
 MODULE GASFIT_MODULE
 
 ! General control input variables
-  CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line
+  CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line, &
+       fitout_sun, fitout_rad, fmt
   LOGICAL :: wrt_scr, write_fit, write_spec, mirror, autodiff, if_residuals
   INTEGER*4 :: npoints, nfirstfit
   REAL*8 :: delchi, provar, automult
@@ -11,7 +12,8 @@ MODULE GASFIT_MODULE
        scp_str='Scp', bsp_str='Bsp', alb_str='ALB', hwe_str='HWE', &
        shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
        us1_str='us1', us2_str='us2'
-  INTEGER*4, PARAMETER :: maxiter = 40
+  INTEGER*4, PARAMETER :: maxiter = 40, fitsun_unit = 31, fitrad_unit = 32
+
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
@@ -78,13 +80,13 @@ CONTAINS
     ! December 30, 2010
 
     IMPLICIT NONE
-    LOGICAL :: iprovar
+    LOGICAL :: iprovar, first_sun = .true., first_rad = .true.
     REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
     REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad, sig_rad, &
-         residual
+         residual, parameters, dparameters
 
     REAL*8 :: asum, avg, &
          davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
@@ -94,17 +96,17 @@ CONTAINS
     
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
          j, nfirst, ngas, nrads, npix, npixf, npixfgs, npixfgr, &
-         cld, year, month, day, hour, minu, sec
+         cld, year, month, day, hour, minu, sec, str_len
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
-    write (*, '(a)') 'Reading file... '//fitin
+    write (*, '(a)') 'Reading file... '//TRIM(fitin)
     open (unit = 21, file = fitin, status='old')
     
     ! Open fitting output file.
-    if (wrt_scr) write (*,'(5x, a)') 'enter fitting output file.'
+    if (wrt_scr) write (*,'(5x, a)') 'enter fitting I/O log file.'
     read (*, '(a)') fitout
-    write (*, '(a)') 'Opening file... '//fitout
+    write (*, '(a)') 'Opening file... '//TRIM(fitout)
     open (unit = 22, file = fitout, status='unknown')
     
     ! Read general parameters:
@@ -292,11 +294,23 @@ CONTAINS
     if (wrt_scr) write (*, *) 'nsqueeze =', nrsqe
     if (wrt_scr) write (*, *) 'nshape   =', nrsha
     if (wrt_scr) write (*, *) 'nasym    =', nrasy
+
+    ! Open Sun fitting results output file
+    if (wrt_scr) write (*,'(5x, a)') 'enter Solar fitting results output file.'
+    read (*, '(a)') fitout_sun
+    write (*, '(a)') 'Opening file... '//TRIM(fitout_sun)
+    open (unit = fitsun_unit, file = fitout_sun, status='unknown')
+
+    ! Open radiance fitting results output file
+    if (wrt_scr) write (*,'(5x, a)') 'enter radiance fitting results output file.'
+    read (*, '(a)') fitout_rad
+    write (*, '(a)') 'Opening file... '//TRIM(fitout_rad)
+    open (unit = fitrad_unit, file = fitout_rad, status='unknown')
     
     ! Open irradiance and radiance level 1 file.
     if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
     read (*, '(a)') specin
-    write (*, '(a)') 'Opening file... '//specin
+    write (*, '(a)') 'Opening file... '//TRIM(specin)
     open (unit = 23, file = specin, status='old')
     
     ! Open spectrum output file.
@@ -339,10 +353,6 @@ CONTAINS
           spec_sun(j) = spec_sun(j) / remult
        end do
     end if
-    
-    ! Write out the input line and other input information.
-    IF (write_fit) WRITE (22, '(a)') inputline
-    IF (write_fit) CALL write_input()
     
     ! Proceed with solar fit for slit function and wavelength calibration
     ! Perform solar wavelength calibration and slit width fitting:
@@ -394,47 +404,72 @@ CONTAINS
        end if
     end do
     if (wrt_scr) write (*, *) 'nvar_sun =', nvar_sun
+
+    
+    ! Write out the input line and other input information.
+    IF (write_fit) WRITE (22, '(a)') inputline
+    IF (write_fit) CALL write_input()
     
     ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
     ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-         fit(1:npoints),database(npars+4,1:npoints))
+         fit(1:npoints),database(npars+4,1:npoints),parameters(1:n_solar_pars), &
+         dparameters(1:n_solar_pars))
     correl = 0.0d0; covar=0.0d0; fit=0.0d0; database = 0.0d0
 
-    ! Perform fit
+    ! Perform initial solar fit
     call specfit (npoints, n_solar_pars, nvar_sun, list_sun(1:n_solar_pars), &
          avg, spec_sun(1:npoints), pos_sun(1:npoints), sig_sun(1:npoints), &
          fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
          var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
          iprovar, 1)
     
-    ! Shift and squeeze solar spectrum.
-    shift = var_sun(nshi); squeeze = var_sun(nsqe)
-    do i = 1, npoints
-       pos_sun(i) = (pos_sun(i) - var_sun(nshi)) / (1.d0 + var_sun(nsqe))
+    ! Fill up parameters and dparameters arrays
+    do i = 1, n_solar_pars
+       if (sun_par_str(i) .eq. ble_str .or. &
+            sun_par_str(i) .eq. ad1_str .or. &
+            sun_par_str(i) .eq. ad2_str ) then
+          parameters(i)  = var_sun(i) * var_sun_factor(i)
+          dparameters(i) = (rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvar_sun))) &
+               * var_sun_factor(i)
+       else
+          parameters(i)  = var_sun(i)
+          dparameters(i) = rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvar_sun))
+       end if
     end do
-    dshift = rms * sqrt (covar (nshi, nshi) * float (npoints) / &
-         float (npoints - nvar_sun))
+
+    ! Shift and squeeze solar spectrum.
+    shift = parameters(nshi); squeeze = parameters(nsqe)
+    pos_sun(1:npoints) = (pos_sun(1:npoints) - var_sun(nshi)) / (1.d0 + var_sun(nsqe))
+    dshift = dparameters(nshi)
     write (*, '(a, 1pe11.3)') 'solar wavelength calibration: rms = ', rms
     write (*, '(a, 1p2e14.6)') 'irrad: shift, 1 sigma = ', - var_sun (nshi), dshift
     write (*, *) 'nvar_sun = ', nvar_sun
     
     ! Set slit function parameters for later use in undersampling correction. 
     ! HW1E means the gaussian half-width at 1/e of the maximum intensity.
-    hw1e = var_sun(nhwe); shap = var_sun(nsha); asym = var_sun(nasy)
-    dhw1e = rms * sqrt (covar (nhwe, nhwe) * float (npoints) / &
-         float (npoints - nvar_sun))
-    dshap = rms * sqrt (covar (nsha, nsha) * float (npoints) / &
-         float (npoints - nvar_sun))
-    dasym = rms * sqrt (covar (nasy, nasy) * float (npoints) / &
-         float (npoints - nvar_sun))
+    hw1e = parameters(nhwe); shap = parameters(nsha); asym = parameters(nasy)
+    dhw1e = dparameters(nhwe); dshap = dparameters(nsha); dasym = dparameters(nasy)
     write (*, '(a, 1p2e14.6)') 'irrad: hw1e, 1 sigma = ', hw1e, dhw1e
     write (*, '(a, 1p2e14.6)') 'irrad: shap, 1 sigma = ', shap, dshap
     write (*, '(a, 1p2e14.6)') 'irrad: asym, 1 sigma = ', asym, dasym
-    
+
+    ! Output to fitting file
+    str_len = 0
+    DO i = 1, n_solar_pars
+       if (LEN(TRIM(sun_par_names(i))) .gt. str_len) str_len = LEN(TRIM(sun_par_names(i)))
+    end DO
+    write(fitsun_unit, '(a)') '!!!Initial solar wavelenght and slit calibration!!!'
+    write(fmt,'(a,i2,a,i2,a)') '(9x,',n_solar_pars,'(2x,a',str_len,'))'
+    write(fitsun_unit,fmt) (TRIM(sun_par_names(i)),i=1,n_solar_pars)
+
+    write(fmt,'(a,i2,a,i2,a)') '(a9,',n_solar_pars,'(2x,1pE',str_len,'.3))'
+    write(fitsun_unit,fmt) 'Columns: ',parameters(1:n_solar_pars)
+    write(fitsun_unit,fmt) 'DColums: ',dparameters(1:n_solar_pars)
+
     ! Deallocate variables needed for fitting
-    DEALLOCATE(correl, covar, fit)  
+    DEALLOCATE(correl, covar, fit, parameters, dparameters)  
     write (*, *) 'finished with Solar calibration'
- 
+   
     ! Finish building database of reference spectra
     ! Calculate the undersampled spectrum.
     ALLOCATE(underspec(1:2,1:npoints))
@@ -520,7 +555,6 @@ CONTAINS
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
           if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
-          write(*,'(1x,a,i4,a,1pE9.3)') 'Processing pixel ', npix,' RMS: ',rms
 
           ! If the pixel is to be processed read the radiance and save it in the right
           ! variables
@@ -569,7 +603,7 @@ CONTAINS
              ! consistent during the day and with original solar fit.
              ! Allocate variables neeed for fitting (specfit, mrqcof & mrqmin)
              ALLOCATE(correl(1:n_solar_pars,1:n_solar_pars),covar(1:n_solar_pars,1:n_solar_pars), &
-                  fit(1:npoints))
+                  fit(1:npoints),parameters(1:n_solar_pars),dparameters(1:n_solar_pars))
              correl = 0.0d0; covar=0.0d0; fit=0.0d0
              ! Re-initialize solar fitting variables
              var_sun(1:n_solar_pars) = init_sun(1:n_solar_pars)
@@ -581,10 +615,41 @@ CONTAINS
                   var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
                   iprovar, 1)
              if (iprovar) npixfgs = npixfgs + 1
-             ! Deallocate variables needed for solar fitting
-             DEALLOCATE(correl, covar, fit)  
-             write(13,'(I4,1x,L,1x,2(a,1x,1pE11.3))') npix, iprovar, &
-                  'Shift: ',var_sun(nshi), ' RMS: ',rms
+
+             ! Fill up parameters and dparameters arrays
+             do i = 1, n_solar_pars
+                if (sun_par_str(i) .eq. ble_str .or. &
+                     sun_par_str(i) .eq. ad1_str .or. &
+                     sun_par_str(i) .eq. ad2_str ) then
+                   parameters(i)  = var_sun(i) * var_sun_factor(i)
+                   dparameters(i) = (rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvar_sun))) &
+                        * var_sun_factor(i)
+                else
+                   parameters(i)  = var_sun(i)
+                   dparameters(i) = rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvar_sun))
+                end if
+             end do
+
+             ! Output to Solar fitting file
+             str_len = 0
+             DO i = 1, n_solar_pars
+                if (LEN(TRIM(sun_par_names(i))) .gt. str_len) str_len = LEN(TRIM(sun_par_names(i)))
+             end DO
+             
+             If (first_sun) then
+                write(fitsun_unit, '(a)') '!!!Solar iteration wavelenght and slit calibration!!!'
+                write(fmt,'(a,i2,a,i2,a)') '(14x,',n_solar_pars+2,'(2x,a',str_len,'))'
+                write(fitsun_unit,fmt) (TRIM(sun_par_names(i)),i=1,n_solar_pars),'RMS','ITER'
+                first_sun = .false.
+             end If
+
+             write(fmt,'(a,i2,a,i2,a,i2,a)') '(I5,a9,',n_solar_pars+1,'(2x,1pE',str_len,'.3),I',str_len,')'
+             write(fitsun_unit,fmt) npix, 'Column: ',parameters(1:n_solar_pars),rms,iteration
+             write(fitsun_unit,fmt) npix, 'DColum: ',dparameters(1:n_solar_pars),rms,iteration
+
+             ! Deallocate fitting variables
+             DEALLOCATE(correl, covar, fit, parameters, dparameters)  
+
           end if
 
           ! Second spectral fit with optical absorptions
@@ -598,7 +663,7 @@ CONTAINS
           
              !   BOAS fitting now done here.
              ALLOCATE(correl(1:npars,1:npars),covar(1:npars,1:npars), &
-                  fit(1:npoints))
+                  fit(1:npoints),parameters(1:npars),dparameters(1:npars))
              correl = 0.0d0; covar=0.0d0; fit=0.0d0
              iprovar = .false.
              call specfit (npoints, npars, nvaried, list_rad(1:npars), &
@@ -606,9 +671,41 @@ CONTAINS
                   fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
                   par_str(1:npars), iprovar, 2)
              if (iprovar) npixfgr = npixfgr + 1
-             DEALLOCATE(correl, covar, fit)  
-             write(13,'(I4,1x,L,1x,I4,1x,3(a,1x,1pE11.3))') npix, iprovar, iteration, &
-                  'Shift: ',var(nrshi), ' alb: ',var(nralb), ' rms: ',rms
+
+             ! Fill up parameters and dparameters arrays
+             do i = 1, npars
+                if (par_str(i) .eq. ble_str .or. &
+                     par_str(i) .eq. ad1_str .or. &
+                     par_str(i) .eq. ad2_str ) then
+                   parameters(i)  = var(i) * var_factor(i)
+                   dparameters(i) = (rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvaried))) &
+                        * var_factor(i)
+                else
+                   parameters(i)  = var(i)
+                   dparameters(i) = rms * sqrt(covar(i,i) * FLOAT(npoints) / float(npoints-nvaried))
+                end if
+             end do
+
+
+             ! Output to radiance fitting file
+             str_len = 0
+             DO i = 1, n_solar_pars
+                if (LEN(TRIM(sun_par_names(i))) .gt. str_len) str_len = LEN(TRIM(sun_par_names(i)))
+             end DO
+
+             If (first_rad) then
+                write(fitrad_unit, '(a)') '!!!Radiance iteration fitting!!!'
+                write(fmt,'(a,i2,a,i2,a)') '(14x,',npars+2,'(2x,a',str_len,'))'
+                write(fitrad_unit,fmt) (TRIM(par_names(i)),i=1,npars),'RMS','ITER'
+                first_rad = .false.
+             end If
+
+             write(fmt,'(a,i2,a,i2,a,i2,a)') '(I5,a9,',npars+1,'(2x,1pE',str_len,'.3),I',str_len,')'
+             write(fitrad_unit,fmt) npix, 'Column: ',parameters(1:npars),rms,iteration
+             write(fitrad_unit,fmt) npix, 'DColum: ',dparameters(1:npars),rms,iteration
+
+             ! Deallocate radiance fitting variables
+             DEALLOCATE(correl, covar, fit, parameters, dparameters)  
           end if
 
        else 
@@ -626,8 +723,6 @@ CONTAINS
     END DO radfit
 
 50  continue
-    print*, npix, npixf, npixfgs, npixfgr
-    print*, var(1:npars)
 
     ! Deallocate variables
     DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
@@ -635,7 +730,6 @@ CONTAINS
          kpspec_gauss)
     DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
          pos_rad, spec_rad, sig_rad)
-    stop
 
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
@@ -718,6 +812,8 @@ CONTAINS
     close (unit = 22)
     close (unit = 23)
     close (unit = 24)
+    close (unit = fitsun_unit)
+    close (unit = fitrad_unit)
     
   END SUBROUTINE GASFIT
 
