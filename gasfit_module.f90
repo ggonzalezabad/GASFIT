@@ -2,7 +2,7 @@ MODULE GASFIT_MODULE
 
 ! General control input variables
   CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line, &
-       fitout_sun, fitout_rad, fmt
+       fitout_sun, fitout_rad, fmt, geo_out
   LOGICAL :: wrt_scr, write_fit, write_spec, mirror, autodiff, if_residuals
   INTEGER*4 :: npoints, nfirstfit
   REAL*8 :: delchi, provar, automult
@@ -12,7 +12,8 @@ MODULE GASFIT_MODULE
        scp_str='Scp', bsp_str='Bsp', alb_str='ALB', hwe_str='HWE', &
        shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
        us1_str='us1', us2_str='us2'
-  INTEGER*4, PARAMETER :: maxiter = 40, fitsun_unit = 31, fitrad_unit = 32
+  INTEGER*4, PARAMETER :: maxiter = 40, fitsun_unit = 31, fitrad_unit = 32, &
+       geo_unit = 33
 
 
 ! High resolution solar spectrum variables
@@ -80,7 +81,7 @@ CONTAINS
     ! December 30, 2010
 
     IMPLICIT NONE
-    LOGICAL :: iprovar, first_sun = .true., first_rad = .true.
+    LOGICAL :: iprovar, first_sun = .true., first_rad = .true., first_geo = .true.
     REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
@@ -91,12 +92,11 @@ CONTAINS
     REAL*8 :: asum, avg, &
          davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
          dshiftrad, gas, hw1e, shap, asym, remult, rmsavg, &
-         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa, &
-         lat, lon, sza, saa, vza, vaa
+         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
     
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
          j, nfirst, ngas, nrads, npix, npixf, npixfgs, npixfgr, &
-         cld, year, month, day, hour, minu, sec, str_len
+         str_len
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
@@ -177,7 +177,7 @@ CONTAINS
     !
     ! var_sun are the solar fitting variables, normally describing a cubic baseline
     ! polynomial, a cubic overall scaling polynomial, an "albedo" (intensity
-    ! multiplier), slit width (hw1/e), spectral wavelength shift and spectral
+   ! multiplier), slit width (hw1/e), spectral wavelength shift and spectral
     ! (accordion) squeeze. Normally, parameter 5 (the zeroth order scaling term)
     ! and parameter 9, the intensity multiplier are not varied simultaneously since
     ! they are very highly correlated.
@@ -294,6 +294,12 @@ CONTAINS
     if (wrt_scr) write (*, *) 'nsqueeze =', nrsqe
     if (wrt_scr) write (*, *) 'nshape   =', nrsha
     if (wrt_scr) write (*, *) 'nasym    =', nrasy
+
+    ! Open geolocation fitting results output file
+    if (wrt_scr) write (*,'(5x, a)') 'enter geolocation for fitting results output file.'
+    read (*, '(a)') geo_out
+    write (*, '(a)') 'Opening file... '//TRIM(geo_out)
+    open (unit = geo_unit, file = geo_out, status='unknown')
 
     ! Open Sun fitting results output file
     if (wrt_scr) write (*,'(5x, a)') 'enter Solar fitting results output file.'
@@ -550,11 +556,26 @@ CONTAINS
        READ (23, *) ilat, ilon
        READ (23, *) isza, isaa, ivza, ivaa
        npix = npix+1
-       
+       print*, npix
        ! Decide whether to process. If so, update the appropriate arrays
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
           if (wrt_scr) write(*,'(a,I5)') 'Processing pixel # ',npix
+
+          ! Output to geolocation file the geolocation values
+          if (first_geo) then
+             write(geo_unit,'(a)') '!!!Geolocation for fitting results!!!'
+             write(geo_unit,'(a)') 'Pixel# Cloud_flag Year Month Day Hour Minute Second '//&
+                  'Latitude Longitude      SZA      SAA      VZA      VAA'
+             fmt = '(I6,I11,I5,I6,I4,I5,I7,I7,F9.2,F10.2,4F9.2)'
+             write(geo_unit,fmt) npix, icld, iyear, imonth, iday, ihour, imin, isec, ilat, &
+                  ilon, isza, isaa, ivza, ivaa
+             first_geo = .false.
+          else
+             fmt = '(I6,I11,I5,I6,I4,I5,I7,I7,F9.2,F10.2,4F9.2)'
+             write(geo_unit,fmt) npix, icld, iyear, imonth, iday, ihour, imin, isec, ilat, &
+                  ilon, isza, isaa, ivza, ivaa
+          end if
 
           ! If the pixel is to be processed read the radiance and save it in the right
           ! variables
@@ -812,6 +833,7 @@ CONTAINS
     close (unit = 22)
     close (unit = 23)
     close (unit = 24)
+    close (unit = geo_unit)
     close (unit = fitsun_unit)
     close (unit = fitrad_unit)
     
