@@ -4,7 +4,7 @@ MODULE GASFIT_MODULE
   CHARACTER(256) :: fitin, fitout, specin, specout, inputline, general_line, &
        fitout_sun, fitout_rad, fmt, geo_out
   LOGICAL :: wrt_scr, write_fit, write_spec, mirror, autodiff, if_residuals
-  INTEGER*4 :: npoints, nfirstfit
+  INTEGER*4 :: npoints
   REAL*8 :: delchi, provar, automult
   
 ! Parameters
@@ -14,7 +14,6 @@ MODULE GASFIT_MODULE
        us1_str='us1', us2_str='us2'
   INTEGER*4, PARAMETER :: maxiter = 40, fitsun_unit = 31, fitrad_unit = 32, &
        geo_unit = 33
-
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
@@ -44,9 +43,9 @@ MODULE GASFIT_MODULE
   CHARACTER(3), ALLOCATABLE, DIMENSION(:) :: par_str
   LOGICAL :: iterate_rad, weight_rad, renorm, update_pars
   LOGICAL, ALLOCATABLE, DIMENSION(:) :: if_varied
-  INTEGER*4 :: ll_rad, lu_rad, nreport, cldmax, npars, nvaried, &
+  INTEGER*4 :: ll_rad, lu_rad, cldmax, npars, nvaried, &
        nralb, nrhwe, nrshi, nrsqe, nrsha, nrasy
-  REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin, report_mult
+  REAL*8 :: div_rad, phase, szamax, szamin, latmax, latmin
   REAL*8, ALLOCATABLE, DIMENSION(:) :: initial, var, diff, var_factor
 
 ! Variables for fit. To be allocated depending on the number of
@@ -82,21 +81,18 @@ CONTAINS
 
     IMPLICIT NONE
     LOGICAL :: iprovar, first_sun = .true., first_rad = .true., first_geo = .true.
-    REAL*8, ALLOCATABLE, DIMENSION(:) :: fit, temp
+    REAL*8, ALLOCATABLE, DIMENSION(:) :: fit
 
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
     REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad, sig_rad, &
          residual, parameters, dparameters
 
-    REAL*8 :: asum, avg, &
-         davg,  dgas, dhw1e, dshap, dasym, drelavg, dshift, dshiftavg, &
-         dshiftrad, gas, hw1e, shap, asym, remult, rmsavg, &
-         shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
+    REAL*8 :: asum, avg, dhw1e, dshap, dasym, dshift, hw1e, shap, asym, &
+         remult, shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
     
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
-         j, nfirst, ngas, nrads, npix, npixf, npixfgs, npixfgr, &
-         str_len
+         j, npix, npixf, npixfgs, npixfgr, str_len
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
@@ -151,8 +147,7 @@ CONTAINS
     ! solar_line is a comment that may be echoed in the output.
     !
     ! if (iterate_sun) perform wavelength calibration and slit width calibration on
-    ! the satellite irradiance spectrum for this orbit. Then, perform a wavelength
-    ! calibration for one radiance spectrum, selected by nfirstfit (read in below).
+    ! the satellite irradiance spectrum for this orbit.
     !
     ! f (weight_sun) make the fit a weighted fit, with highly-weighted wavelength
     ! selected by ll_sun and lu_sun. This is used to select the active fitting
@@ -225,26 +220,17 @@ CONTAINS
     ! correction for spectral undersampling. See subroutine undersample and
     ! Applied Optics 44, 1296-1304, 2005 for more detail.
     !
-    ! nreport is the parameter number outputted to the fitting output file.
-    ! report_mult is a multiplier for its value and fitting uncertainty. report_mult
-    ! is required because the reference spectra are scaled (below) to avoid
-    ! potential numerical underflow issues. The fitted parameter values must be
-    ! scaled by the  same amount
-    !
     ! Ground pixels (scenes) with solar zenith angle (sza) <= szamax, (sza) => szamin,
     ! latitudes <= latmax, and latitudes >= latmin are analyzed.
     !
     ! Maximum cloud index clasification (cldmax). Only process pixels with
     ! (cloud index) <= cldmax.
     !
-    ! nfirstfit is the number of the radiance (counting consecutively along the
-    ! orbit, as given by ipix) to fit for wavelength in order to establish a
-    ! standard wavelength grid and sample the reference spectra.
     !
     read (21, '(a)') radiance_line
     read (21, *) iterate_rad, renorm, weight_rad, update_pars, ll_rad, lu_rad, &
-         div_rad, phase, nreport, report_mult, npars
-    read (21, *) szamax, szamin, latmax, latmin, cldmax, nfirstfit
+         div_rad, phase, npars
+    read (21, *) szamax, szamin, latmax, latmin, cldmax
     
     ! Allocate radiance fitting parameter variables
     ALLOCATE(var(1:npars), if_varied(1:npars),diff(1:npars), initial(1:npars), &
@@ -279,7 +265,6 @@ CONTAINS
        if (if_varied (i)) then
           nvaried = nvaried + 1
           list_rad (nvaried) = i
-          if (i .eq. nreport) ngas = nvaried
        end if
     end do
     
@@ -505,17 +490,7 @@ CONTAINS
     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
     ! Initialize number of radiance pixels & number of radiance pixel fitted
     npix = 0; npixf = 0; npixfgs = 0; npixfgr = 0
-    
-    ! Initialize several diagnostics.
-    ! rmsavg: average fitting rms.
-    ! davg: average fitting uncertainty for reported parameter.
-    ! drelavg: average relative fitting uncertainty for reported parameter.
-    ! dshiftavg:  average fitting uncertainty for spectral shift parameter.
-    rmsavg = 0.d0
-    davg = 0.d0
-    drelavg = 0.d0
-    dshiftavg = 0.d0
-    
+        
     ! Allocate general fitting variables
     ALLOCATE(pos_rad(1:npoints),spec_rad(1:npoints),sig_rad(1:npoints))
     
@@ -691,7 +666,6 @@ CONTAINS
                   avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
                   fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
                   par_str(1:npars), iprovar, 2)
-             if (iprovar) npixfgr = npixfgr + 1
 
              ! Fill up parameters and dparameters arrays
              do i = 1, npars
@@ -745,32 +719,12 @@ CONTAINS
 
 50  continue
 
-    ! Deallocate variables
-    DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
-         init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
-         kpspec_gauss)
-    DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
-         pos_rad, spec_rad, sig_rad)
-
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
           !     write (24, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
           !     spec (j) - fit (j)
           !   end do
           
-          !   Write out fitting results.
-!!$          gas = report_mult * var (nreport)
-!!$          dgas = report_mult * rms * sqrt (covar (ngas, ngas) * float (npoints) / &
-!!$               float (npoints - nvaried))
-!!$          write (22, '(i5, 1p3e12.4)') npix(i), gas, dgas, rms
-!!$          write (22, '(4f7.2)') sza(i), saa(i), vza(i), vaa(i)
-!!$          write (22, '(10f7.2)') lat(i), lon(i)
-!!$          dshiftrad = rms * sqrt (covar (nshiftrad, nshiftrad) * float (npoints) / &
-!!$               float (npoints - nvaried))
-!!$          dshiftavg = dshiftavg + dshiftrad
-!!$          rmsavg = rmsavg + rms
-!!$          davg = davg + dgas
-!!$          drelavg = drelavg + dabs (dgas / gas)
 !!$          
 !!$          ! Write out extra diagnostics.
 !!$          if (write_fit) &
@@ -787,47 +741,39 @@ CONTAINS
 !!$       end if
 !!$    end do ! on nrads.
 !!$    
-!!$    ! Write out the average fitting statistics to screen.
-!!$    write (*, '(a33, 1pe13.5)') '                       Avg rms = ', rmsavg / nrads
-!!$    write (*, '(a33, 1pe13.5)') '                     Avg dgas = ', davg / nrads
-!!$    write (*, '(a33, 1pe13.5)') ' Avg relative gas uncertainty = ', drelavg / nrads
-!!$    write (*, '(a33, 1pe13.5)') ' Avg radiance shift uncertainty = ', dshiftavg / &
-!!$         nrads
-!!$    
-!!$    ! Write out the fitting statistics and average residuals.
-!!$    if (if_residuals) then
-!!$       write (22, '(a28, 1pe13.5)') '                  Avg rms = ', rmsavg / nrads
-!!$       write (22, '(a28, 1pe13.5)') '                Avg dgas = ', davg / nrads
-!!$       write (22, '(a28, 1pe13.5)') ' Avg rel gas uncertainty = ', drelavg / nrads
-!!$       do i = 1, npoints
-!!$          write (22, '(f10.5, 1pe13.5)') pos (i), residual (i) / nrads
-!!$       end do
-!!$    end if
-!!$    
-!!$    ! If (mirror), mirror the input file, with updated parameters, onto the output
-!!$    ! fitting file.
-!!$    if (mirror) then
-!!$       write (22, *)
-!!$       write (22, '(a)') inputline
-!!$       write (22, '(a)') general_line
-!!$       write (22, '(i5, 1p2e12.4, 0pf8.4)') npoints, delchi, provar, automult
-!!$       write (22, *) wrt_scr, write_fit, write_spec, mirror, autodiff, &
-!!$            if_residuals
-!!$       write (22, '(a)') solar_line
-!!$       write (22, '(2l2, 3i4, 1pe9.2)') iterate_sun, weight_sun, n_solar_pars, &
-!!$            ll_sun, lu_sun, div_sun
-!!$       do i = 1, n_solar_pars
-!!$          write (22, '(1pe15.7, l4, 1pe14.5)') var_sun (i), if_var_sun (i), &
-!!$               diffsun (i)
-!!$       end do
-!!$       write (22, '(a)') radiance_line
-!!$       write (22, '(4l2, 2i4, 1pe9.2, 0pf5.2)') iterate_rad, renorm, weight_rad, &
-!!$            update_pars, ll_rad, lu_rad, div_rad, phase
-!!$       write (22, '(4f7.2, i6)') szamax, szamin, latmax, latmin, nfirstfit
-!!$       do i = 1, npars
-!!$          write (22, '(1pe15.7, l4, 1pe14.5)') var (i), if_varied (i), diff (i)
-!!$       end do
-!!$    end if
+    ! If (mirror), mirror the input file, with updated parameters, onto the output
+    ! fitting file.
+    if (mirror) then
+       write (22, *)
+       write (22, '(a)') inputline
+       write (22, '(a)') general_line
+       write (22, '(i5, 1p2e12.4, 0pf8.4)') npoints, delchi, provar, automult
+       write (22, *) wrt_scr, write_fit, write_spec, mirror, autodiff, &
+            if_residuals
+       write (22, '(a)') solar_line
+       write (22, '(2l2, 3i4, 3(1pe9.2))') iterate_sun, weight_sun, n_solar_pars, &
+            ll_sun, lu_sun, div_sun
+       do i = 1, n_solar_pars
+          write (22, '(I3, 1pe11.1, l4, 1pe11.1, A4, 1pe11.1,1x,A25)') i, var_sun (i), if_var_sun (i), &
+               diffsun (i), sun_par_str(i), var_sun_factor(i), sun_par_names(i)
+       end do
+       write (22, '(a)') radiance_line
+       write (22, '(4l2, 2i4, 1pe9.2, 0pf5.2, I3)') iterate_rad, renorm, weight_rad, &
+            update_pars, ll_rad, lu_rad, div_rad, phase, npars
+       write (22, '(4f7.2,I4)') szamax, szamin, latmax, latmin, cldmax
+       do i = 1, npars
+          write (22, '(I3, 1pe11.1, l4, 1pe11.1, A4, 1pe11.1,1x,A25)') i, var (i), if_varied (i), diff (i), &
+               par_str(i), var_factor(i), par_names(i)
+       end do
+    end if
+
+
+    ! Deallocate variables
+    DEALLOCATE(var_sun, var_sun_factor, sun_par_str, sun_par_names, diffsun, if_var_sun, &
+         init_sun, list_sun, pos_sun, spec_sun, kppos, kpspec, kppos_ss, &
+         kpspec_gauss)
+    DEALLOCATE(var, var_factor, par_str, par_names, diff, if_varied, initial, &
+         pos_rad, spec_rad, sig_rad)
     
     close (unit = 21)
     close (unit = 22)
@@ -1354,7 +1300,6 @@ CONTAINS
     write (22, '(a, I3)') '  cldmax =', cldmax
     write (22, '(a, f7.2)') '  latmax =', latmax
     write (22, '(a, f7.2)') '  latmin =', latmin
-    write (22, '(a, i6)') '  nfirst =', nfirstfit
     write (22, '(a, f8.4)') '  phase =', phase
     
     write (22, *)
