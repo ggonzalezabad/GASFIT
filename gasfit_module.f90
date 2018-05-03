@@ -87,13 +87,15 @@ CONTAINS
     INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_rad
     REAL*8, ALLOCATABLE, DIMENSION(:,:) :: underspec
     REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_rad, spec_rad, sig_rad, &
-         residual, parameters, dparameters
+         parameters, dparameters
 
     REAL*8 :: asum, avg, dhw1e, dshap, dasym, dshift, hw1e, shap, asym, &
          remult, shift, sigsum, squeeze, ssum, ilat, ilon, isza, isaa, ivza, ivaa
     
     INTEGER*4 :: i, ipix, icld, iyear, imonth, iday, ihour, imin, isec, &
          j, npix, npixf, npixfgs, npixfgr, str_len
+
+    CHARACTER(LEN=256) :: dummy_str
     
     write (*,'(5x, a)') 'enter fitting input file.'
     read (*, '(a)') fitin
@@ -103,7 +105,7 @@ CONTAINS
     ! Open fitting output file.
     if (wrt_scr) write (*,'(5x, a)') 'enter fitting I/O log file.'
     read (*, '(a)') fitout
-    write (*, '(a)') 'Opening file... '//TRIM(fitout)
+    if (wrt_scr) write (*, '(a)') 'Opening file... '//TRIM(fitout)
     open (unit = 22, file = fitout, status='unknown')
     
     ! Read general parameters:
@@ -284,33 +286,31 @@ CONTAINS
     ! Open geolocation fitting results output file
     if (wrt_scr) write (*,'(5x, a)') 'enter geolocation for fitting results output file.'
     read (*, '(a)') geo_out
-    write (*, '(a)') 'Opening file... '//TRIM(geo_out)
+    if (wrt_scr) write (*, '(a)') 'Opening file... '//TRIM(geo_out)
     open (unit = geo_unit, file = geo_out, status='unknown')
 
     ! Open Sun fitting results output file
     if (wrt_scr) write (*,'(5x, a)') 'enter Solar fitting results output file.'
     read (*, '(a)') fitout_sun
-    write (*, '(a)') 'Opening file... '//TRIM(fitout_sun)
+    if (wrt_scr) write (*, '(a)') 'Opening file... '//TRIM(fitout_sun)
     open (unit = fitsun_unit, file = fitout_sun, status='unknown')
 
     ! Open radiance fitting results output file
     if (wrt_scr) write (*,'(5x, a)') 'enter radiance fitting results output file.'
     read (*, '(a)') fitout_rad
-    write (*, '(a)') 'Opening file... '//TRIM(fitout_rad)
+    if (wrt_scr) write (*, '(a)') 'Opening file... '//TRIM(fitout_rad)
     open (unit = fitrad_unit, file = fitout_rad, status='unknown')
     
     ! Open spectrum (measured, fitted, and residual) output file.
-    if (write_spec .or. if_residuals) then
-       if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
-       read (*, '(a)') specout
-       if (wrt_scr) write (*,'(a)') 'Opening file... '//TRIM(specout)
-       open (unit = specout_unit, file = specout, status='unknown')
-    end if
+    if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
+    read (*, '(a)') specout
+    if (wrt_scr) write (*,'(a)') 'Opening file... '//TRIM(specout)
+    open (unit = specout_unit, file = specout, status='unknown')
     
     ! Open irradiance and radiance level 1 file.
     if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
     read (*, '(a)') specin
-    write (*, '(a)') 'Opening file... '//TRIM(specin)
+    if (wrt_scr) write (*, '(a)') 'Opening file... '//TRIM(specin)
     open (unit = 23, file = specin, status='old')
 
     ! Read the solar spectrum. A 2-column (position and irradiance value) spectrum
@@ -414,6 +414,11 @@ CONTAINS
          fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
          var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
          iprovar, 1)
+
+    ! If write_spec or if_residuals output spectrum
+    if (write_spec .or. if_residuals) &
+         call write_spectrum (npoints, ll_sun, lu_sun, pos_sun(1:npoints), sig_sun(1:npoints), &
+         spec_sun(1:npoints), fit(1:npoints), 'Initial solar wavelength calibration')
     
     ! Fill up parameters and dparameters arrays
     do i = 1, n_solar_pars
@@ -611,6 +616,13 @@ CONTAINS
                   fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
                   var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
                   iprovar, 1)
+
+             ! Write out spectrum or residual if requested
+             if (write_spec .or. if_residuals) then
+                write(dummy_str,'(A,1x,I5)') 'Solar wavelength calibration for pixel ', npix
+                call write_spectrum (npoints, ll_sun, lu_sun, pos_rad(1:npoints), sig_sun(1:npoints), &
+                     spec_rad(1:npoints), fit(1:npoints), TRIM(dummy_str))
+             end if
              if (iprovar) npixfgs = npixfgs + 1
 
              ! Fill up parameters and dparameters arrays
@@ -668,6 +680,13 @@ CONTAINS
                   fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
                   par_str(1:npars), iprovar, 2)
 
+             ! Write out spectrum or residual if requested
+             if (write_spec .or. if_residuals) then
+                write(dummy_str,'(A,1x,I5)') 'Radiance fitting for pixel ', npix
+                call write_spectrum (npoints, ll_rad, lu_rad, pos_rad(1:npoints), sig_sun(1:npoints), &
+                     spec_rad(1:npoints), fit(1:npoints), TRIM(dummy_str))
+             end if
+
              ! Fill up parameters and dparameters arrays
              do i = 1, npars
                 if (par_str(i) .eq. ble_str .or. &
@@ -720,28 +739,6 @@ CONTAINS
 
 50  continue
 
-          !   write out radiance fit: keep here as possible future diagnostic.
-          !   do j = ll_rad, lu_rad
-          !     write (specout_unit, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
-          !     spec (j) - fit (j)
-          !   end do
-          
-!!$          
-!!$          ! Write out extra diagnostics.
-!!$          if (write_fit) &
-!!$               call write_output (nvaried, list_rad, iteration, write_fit, write_spec, &
-!!$               iterate_rad, pos, spec, fit, var, initial, covar, chisq, delchi, correl, &
-!!$               rms, npoints, weight_rad, provar, iprovar)
-!!$          
-!!$          ! else (TBD later) calculate sun and radiance spectrum, no iteration.
-!!$       end if ! on iterate_rad
-!!$       if (if_residuals) then
-!!$          do j = 1, npoints
-!!$             residual (j) = residual (j) + spec (j) - fit (j)
-!!$          end do
-!!$       end if
-!!$    end do ! on nrads.
-!!$    
     ! If (mirror), mirror the input file, with updated parameters, onto the output
     ! fitting file.
     if (mirror) then
@@ -1313,73 +1310,37 @@ CONTAINS
     return
   end subroutine write_input
 
-  subroutine write_output (nvaried, lista, iteration, write_fit, write_spec, &
-       iterate, pos, spec, fit, var, initial, covar, chisq, delchi, correl, rms, &
-       npoints, weight, provar, iprovar)
+  subroutine write_spectrum (np, ll, lu, wav, sig, spc, fit, str)
     
-    ! Detailed fitting diagnostics. Best when only fitting a very few spectra!
+    ! Write out measured, fitted, and residual spectrum for fitting window.
+    IMPLICIT NONE
 
-    implicit real*8 (a - h, o - z)
-    parameter (mmax = 64)
-    parameter (maxpts = 7000)
-    logical write_fit, write_spec, iterate, weight, iprovar
-    real*8 initial (mmax)
-    dimension pos (maxpts), spec (maxpts), fit (maxpts)
-    dimension lista (mmax)
-    dimension covar (mmax, mmax), correl (mmax, mmax)
-    dimension var (mmax)
-    save
-    
-    write (*, *) 'writing fitting output file'
-    if (iterate) then
-       write (22, '(/,1x,t2,a,t28,i3,t32,a)') 'convergence reached after', &
-            iteration, ' iterations.'
-       if (iprovar) then
-          write (22, '(1x,t2,a)') &
-               'convergence criterion is a change in every variable by less than or'
-          write (22, '(1x,t2,a,t11,1pe9.3,t21,a)') &
-               'equal to ', provar, 'times the differential parameters.'
-          write (22, '(1x,t2,a,t26,1pe10.4,t36,a,//)') 'final value of chisq is', &
-               chisq, '.'
-       else
-          write (22, '(1x,t2,a,t58,1pe10.4,t68,a)') &
-               'convergence criterion is a change in chisq by less than', delchi, &
-               ' for two'
-          write (22, '(1x,t2,a,t50,1pe10.4,t60,a)') &
-               'successive iterations.  final value of chisq is', chisq, '.'
-       end if
-       write (22, '(/,1x,t2,a,t8,1pe10.4,t18,a,/)') 'rms = ', rms, '.'
-       write (22, '(1x,t32,a,/)') 'final parameters'
-       write (22, '(1x,t2,a)') &
-            'parameter    initial value    final value      std. deviation'
-       do i = 1, nvaried
-          j = lista (i)
-          if (weight) then
-             write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
-                  var (j), rms * sqrt (covar (i, i) * float (npoints) / &
-                  float (npoints - nvaried))
-          else
-             write (22, '(1x,t5,i2,t15,1pe14.7,t32,e14.7,t49,e14.7)') j, initial (j), &
-                  var (j), rms * sqrt (covar (i, i) * float (npoints) / &
-                  float (npoints - nvaried))
-          end if
-       end do
-       write (22, '(/,1x,t31,a)') 'correlation matrix'
-       do i = 1, nvaried
-          write (22, '(/,1x,12(2x,f8.5))') (correl (i, j), j = 1, i)
-       end do
+    ! Input variables
+    INTEGER*4, INTENT(IN) :: np, ll, lu
+    REAL*8, INTENT(IN), DIMENSION(1:np) :: wav, sig, spc, fit
+    CHARACTER(LEN=*), INTENT(IN) :: str
+
+    ! Local variables
+    LOGICAL :: first_call = .true.
+    INTEGER*4 :: i
+    save first_call
+
+    if (first_call) then
+       write(specout_unit,'(A)') 'Five columns: Wavelength Weight Measured Fit Residual'
+       write(specout_unit,'(A)') 'Each new entry is delimited by a string indicating if '//&
+            'solar or radiance fit and pixel number'
+       first_call = .false.
     end if
-    
-    if (write_spec .or. if_residuals) then
-       if (write_fit) write (*, *) 'writing spectrum output file'
-       do i = 1, npoints
-          write (specout_unit, '(f10.5, 1p3e13.5)') pos (i), spec (i), fit (i), spec (i) - &
-               fit (i)
-       end do
-    end if
+
+    write(specout_unit,'(A)') str
+    if (wrt_scr) write (*, *) 'writing spectrum output file'
+    do i = ll, lu
+       write (specout_unit, '(f10.4, 1p4e11.3)') wav(i), sig(i), spc(i), fit(i), spc(i) - &
+            fit(i)
+    end do
     
     return
-  end subroutine write_output
+  end subroutine write_spectrum
 
   subroutine super_gauss (np, x, y, hw, sh, as, yc)
     
