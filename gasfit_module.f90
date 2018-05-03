@@ -495,6 +495,7 @@ CONTAINS
     ! ----------------------------------------------------------------- !
     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ !
     ! Initialize number of radiance pixels & number of radiance pixel fitted
+    ! And number of successful fits
     npix = 0; npixf = 0; npixfgs = 0; npixfgr = 0
         
     ! Allocate general fitting variables
@@ -537,7 +538,7 @@ CONTAINS
        READ (23, *) ilat, ilon
        READ (23, *) isza, isaa, ivza, ivaa
        npix = npix+1
-       print*, npix
+       
        ! Decide whether to process. If so, update the appropriate arrays
        IF ( (icld .LE. cldmax) .AND. (isza .LE. szamax) .AND. (isza .GE. szamin) .AND. &
             (ilat .LE. latmax) .AND. (ilat .GE. latmin) ) THEN
@@ -616,6 +617,8 @@ CONTAINS
                   fit(1:npoints), var_sun(1:n_solar_pars), diffsun(1:n_solar_pars), &
                   var_sun_factor(1:n_solar_pars), sun_par_str(1:n_solar_pars), &
                   iprovar, 1)
+             ! Update statistics of successful fits
+             if (iprovar) npixfgs = npixfgs + 1
 
              ! Write out spectrum or residual if requested
              if (write_spec .or. if_residuals) then
@@ -623,7 +626,6 @@ CONTAINS
                 call write_spectrum (npoints, ll_sun, lu_sun, pos_rad(1:npoints), sig_sun(1:npoints), &
                      spec_rad(1:npoints), fit(1:npoints), TRIM(dummy_str))
              end if
-             if (iprovar) npixfgs = npixfgs + 1
 
              ! Fill up parameters and dparameters arrays
              do i = 1, n_solar_pars
@@ -679,6 +681,9 @@ CONTAINS
                   avg, spec_rad(1:npoints), pos_rad(1:npoints), sig_rad(1:npoints), &
                   fit(1:npoints), var(1:npars), diff(1:npars), var_factor(1:npars), &
                   par_str(1:npars), iprovar, 2)
+
+             ! Update statistics of successful fits
+             if (iprovar) npixfgr = npixfgr + 1
 
              ! Write out spectrum or residual if requested
              if (write_spec .or. if_residuals) then
@@ -738,6 +743,10 @@ CONTAINS
     END DO radfit
 
 50  continue
+
+    ! Print to screen general fitting statistics:
+    write(*,'(4(A,I5))') 'Total number of pixels: ',npix,'; Pixels processed: ',&
+         npixf,'; Successful solar: ',npixfgs,'; Successful radiance: ',npixfgr
 
     ! If (mirror), mirror the input file, with updated parameters, onto the output
     ! fitting file.
