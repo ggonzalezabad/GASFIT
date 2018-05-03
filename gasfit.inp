@@ -1,0 +1,36 @@
+ Fitting of ACE campaign zenith measurements for stratospheric IO retrievals
+ General fitting parameters (Number of spectral pixels, Delta-chi, Delta-var, Automult)
+ 1340  1.0000E-04  1.0000E-04  0.001
+ F T T T T T
+ solar fitting parameters (Iterate_sun, Weight_sun, # variables, Active fitting region as starting and ending spectral pixel numbers, normalization factor)
+ T T 10  321 643 1.00E+00
+1   1.0E+00   F   1.0E+00 Scp 0.D00 Scaling_1
+2   1.0E-04   T   1.2E-06 Scp 1.D00 Scaling_2
+3   1.0E-04   T   3.7E-08 Scp 2.D00 Scaling_3
+4   1.0E-03   T   5.6E-06 Bsp 0.D00 Baseline_1
+5   1.0E+00   T   1.0E-06 ALB 1.0 Albedo
+6   1.000     T   1.0E+00 HWE 1.0 Gaussian_HW1E
+7   0.100     T   1.0E-06 SHI 1.0 Shift
+8   0.000     F   0.0E+00 SQE 1.0 Squeeze
+9   2.000     F   1.0E-06 SHA 1.0 Gaussian_Shape
+10  0.000     F   1.0E-06 ASY 1.0 Gaussian_asymmetry
+ radiance fitting parameters (Iterate_rad, yn_renormalization, yn_weighted_fit, yn_update_fitting_parameters, Active fitting region start and end, Radiance normalization factor, Undersampling phase parameter, target parameter, target parameter normalization factor, n_rad_pars)
+ T T T T  321 643 1.00E+00 0.80 17
+  92.49  84.50 30.00 -90.00 10
+1   1.0E+00   F   1.0E+00 Scp 0.D00 Scaling_1
+2   1.0E-02   T   1.2E-06 Scp 1.D00 Scaling_2
+3   1.0E-03   T   3.7E-08 Scp 2.D00 Scaling_3
+4   1.0E-00   T   5.6E-06 Bsp 0.D00 Baseline_1
+5   1.0E-02   T   5.6E-04 ALB 1.D00 Albedo
+6   0.0E+00   F   1.0E+00 HWE 1.D00 Gaussian_HW1E
+7   2.00000   T   1.0E-06 SHI 1.D00 Shift
+8   0.0E+00   F   1.0E+00 SQE 1.D00 Squeeze
+9   2.0E+00   F   0.0E+00 SHA 1.D00 Gaussian_Shape
+10  0.0E+00   F   0.0E+00 ASY 1.D00 Gaussian_asymmetry
+12  1.0E-05   T   1.0E+00 ad1 1.D00 my_ring.txt
+13  1.0E-00   T   4.5E-05 ble 1.D22 my_o3.txt
+14  1.0E-00   T   3.0E-05 ble 1.D18 my_no2.txt
+15  1.0E-00   T   8.8E-06 ble 1.D15 my_io.txt
+16  1.0E-00   T   7.3E-06 ble 2.D27 my_h2o.txt
+17  1.0E+00   T   1.0E-05 ad1 1.D00 us1
+18  1.0E+00   T   1.0E-05 ad1 1.D00 us2

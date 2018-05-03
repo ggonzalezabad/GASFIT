@@ -1,0 +1,96 @@
+ Fitting of ACE campaign zenith measurements for stratospheric IO retrievals                                                                                                                                                                                    
+ BOAS fitting
+  17 total parameters used,  12 varied.
+  10 solar parameters used,   6 varied.
+ spectra of 1340 points were calculated.
+
+ radiance iteration is enabled.
+ solar iteration is enabled.
+ radiance weighting is enabled.
+ ll_rad =          321 lu_rad =          643
+ solar weighting is enabled.
+ ll_sun =          321 lu_sun =          643
+ autodiff enabled; finite differences taken
+  with 1.000E-03 times initial variable.
+ convergence for relative parameter change set at 1.000E-04
+ times the differentiation parameter for each variable.
+  renorm =  T
+  update_pars =  T
+  wrt_scr =  F
+  szamax =  92.49
+  szamin =  84.50
+  cldmax = 10
+  latmax =  30.00
+  latmin = -90.00
+  phase =  0.8000
+
+ Solar Fitting
+  Parameter                     Initial value    Varied
+   Scaling_1                     1.00000E+00       F
+   Scaling_2                     1.00000E-04       T
+   Scaling_3                     1.00000E-04       T
+   Baseline_1                    1.00000E-03       T
+   Albedo                        1.00000E+00       T
+   Gaussian_HW1E                 1.00000E+00       T
+   Shift                         1.00000E-01       T
+   Squeeze                       0.00000E+00       F
+   Gaussian_Shape                2.00000E+00       F
+   Gaussian_asymmetry            0.00000E+00       F
+
+ Radiance Fitting
+  Parameter                     Initial value    Varied
+   Scaling_1                     1.00000E+00       F
+   Scaling_2                     1.00000E-02       T
+   Scaling_3                     1.00000E-03       T
+   Baseline_1                    1.00000E+00       T
+   Albedo                        1.00000E-02       T
+   Gaussian_HW1E                 0.00000E+00       F
+   Shift                         2.00000E+00       T
+   Squeeze                       0.00000E+00       F
+   Gaussian_Shape                2.00000E+00       F
+   Gaussian_asymmetry            0.00000E+00       F
+   my_ring.txt                   1.00000E-05       T
+   my_o3.txt                     1.00000E+00       T
+   my_no2.txt                    1.00000E+00       T
+   my_io.txt                     1.00000E+00       T
+   my_h2o.txt                    1.00000E+00       T
+   us1                           1.00000E+00       T
+   us2                           1.00000E+00       T
+
+
+ Fitting of ACE campaign zenith measurements for stratospheric IO retrievals                                                                                                                                                                                    
+ General fitting parameters (Number of spectral pixels, Delta-chi, Delta-var, Automult)                                                                                                                                                                         
+ 1340  1.0000E-04  1.0000E-04  0.0010
+ F T T T T T
+ solar fitting parameters (Iterate_sun, Weight_sun, # variables, Active fitting region as starting and ending spectral pixel numbers, normalization factor)                                                                                                     
+ T T  10 321 643 1.00E+00
+  1    1.0E+00   F    1.0E+00 Scp    0.0E+00 Scaling_1                
+  2    2.6E-03   T    1.0E-07 Scp    1.0E+00 Scaling_2                
+  3   -5.5E-05   T    1.0E-07 Scp    2.0E+00 Scaling_3                
+  4    9.0E-02   T    1.0E-06 Bsp    0.0E+00 Baseline_1               
+  5    9.3E-01   T    1.0E-03 ALB    1.0E+00 Albedo                   
+  6    2.3E-01   T    1.0E-03 HWE    1.0E+00 Gaussian_HW1E            
+  7   -8.8E-02   T    1.0E-04 SHI    1.0E+00 Shift                    
+  8    0.0E+00   F    0.0E+00 SQE    1.0E+00 Squeeze                  
+  9    2.0E+00   F    1.0E-06 SHA    1.0E+00 Gaussian_Shape           
+ 10    0.0E+00   F    1.0E-06 ASY    1.0E+00 Gaussian_asymmetry       
+ radiance fitting parameters (Iterate_rad, yn_renormalization, yn_weighted_fit, yn_update_fitting_parameters, Active fitting region start and end, Radiance normalization factor, Undersampling phase parameter, target parameter, target parameter normalizatio
+ T T T T 321 643 1.00E+00 0.80 17
+  92.49  84.50  30.00 -90.00  10
+  1    1.0E+00   F    1.0E+00 Scp    0.0E+00 Scaling_1                
+  2    3.6E-01   T    1.0E-05 Scp    1.0E+00 Scaling_2                
+  3    3.4E-02   T    1.0E-06 Scp    2.0E+00 Scaling_3                
+  4    9.5E-01   T    1.0E-03 Bsp    0.0E+00 Baseline_1               
+  5    5.0E-01   T    1.0E-05 ALB    1.0E+00 Albedo                   
+  6    0.0E+00   F    1.0E+00 HWE    1.0E+00 Gaussian_HW1E            
+  7    2.3E+00   T    2.0E-03 SHI    1.0E+00 Shift                    
+  8    0.0E+00   F    1.0E+00 SQE    1.0E+00 Squeeze                  
+  9    2.0E+00   F    0.0E+00 SHA    1.0E+00 Gaussian_Shape           
+ 10    0.0E+00   F    0.0E+00 ASY    1.0E+00 Gaussian_asymmetry       
+ 11   -3.0E-01   T    1.0E-08 ad1    1.0E+00 my_ring.txt              
+ 12    4.4E+00   T    1.0E-03 ble    1.0E+22 my_o3.txt                
+ 13   -3.1E+00   T    1.0E-03 ble    1.0E+18 my_no2.txt               
+ 14    3.7E+01   T    1.0E-03 ble    1.0E+15 my_io.txt                
+ 15    2.0E+01   T    1.0E-03 ble    2.0E+27 my_h2o.txt               
+ 16    3.6E+02   T    1.0E-03 ad1    1.0E+00 us1                      
+ 17   -2.4E+02   T    1.0E-03 ad1    1.0E+00 us2                      
