@@ -13,7 +13,7 @@ MODULE GASFIT_MODULE
        shi_str='SHI', sqe_str='SQE', sha_str='SHA', asy_str='ASY', &
        us1_str='us1', us2_str='us2'
   INTEGER*4, PARAMETER :: maxiter = 40, fitsun_unit = 31, fitrad_unit = 32, &
-       geo_unit = 33
+       geo_unit = 33, specout_unit = 34
 
 ! High resolution solar spectrum variables
   REAL*8, ALLOCATABLE, DIMENSION(:) :: kppos, kpspec, kppos_ss, kpspec_gauss
@@ -29,7 +29,8 @@ MODULE GASFIT_MODULE
        nalb, nhwe, nshi, nsqe, nsha, nasy
   INTEGER*4, ALLOCATABLE, DIMENSION(:) :: list_sun
   REAL*8 :: div_sun
-  REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun, var_sun_factor
+  REAL*8, ALLOCATABLE, DIMENSION(:) :: var_sun, diffsun, init_sun, &
+       var_sun_factor
 
 ! Solar spectrum
   REAL*8, ALLOCATABLE, DIMENSION(:) :: pos_sun, spec_sun, sig_sun
@@ -120,7 +121,7 @@ CONTAINS
     ! If (write_fit) write conditions and diagnostics to an output file. this is
     ! not the same as writing out the fitting results, which is done automatically.
     !
-    ! If (write_spec) write measured spectrum out???
+    ! If (write_spec) write measured spectrum out
     !
     ! If (mirror) mirror the input file onto the output file, with updated
     ! parameters. Useful for tuning fitting parameters, particularly when
@@ -298,20 +299,20 @@ CONTAINS
     write (*, '(a)') 'Opening file... '//TRIM(fitout_rad)
     open (unit = fitrad_unit, file = fitout_rad, status='unknown')
     
+    ! Open spectrum (measured, fitted, and residual) output file.
+    if (write_spec .or. if_residuals) then
+       if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
+       read (*, '(a)') specout
+       if (wrt_scr) write (*,'(a)') 'Opening file... '//TRIM(specout)
+       open (unit = specout_unit, file = specout, status='unknown')
+    end if
+    
     ! Open irradiance and radiance level 1 file.
     if (wrt_scr) write (*,'(5x, a)') 'enter spectrum input file.'
     read (*, '(a)') specin
     write (*, '(a)') 'Opening file... '//TRIM(specin)
     open (unit = 23, file = specin, status='old')
-    
-    ! Open spectrum output file.
-    if (write_spec) then
-       if (wrt_scr) write (*,'(5x, a)') 'enter spectrum output file.'
-       read (*, '(a)') specout
-       if (wrt_scr) write (*,'(a)') 'Opening file... '//TRIM(specout)
-       open (unit = 24, file = specout, status='unknown')
-    end if
-    
+
     ! Read the solar spectrum. A 2-column (position and irradiance value) spectrum
     ! of npoints points, with no header, is expected.
     ALLOCATE(pos_sun(1:npoints), spec_sun(1:npoints), sig_sun(1:npoints))
@@ -721,7 +722,7 @@ CONTAINS
 
           !   write out radiance fit: keep here as possible future diagnostic.
           !   do j = ll_rad, lu_rad
-          !     write (24, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
+          !     write (specout_unit, '(f11.6, 1p3e13.5)') pos (j), spec (j), fit (j), &
           !     spec (j) - fit (j)
           !   end do
           
@@ -778,7 +779,7 @@ CONTAINS
     close (unit = 21)
     close (unit = 22)
     close (unit = 23)
-    close (unit = 24)
+    close (unit = specout_unit)
     close (unit = geo_unit)
     close (unit = fitsun_unit)
     close (unit = fitrad_unit)
@@ -1047,15 +1048,7 @@ CONTAINS
        IF (str(i) .EQ. bsp_str) baseline(1:npoints) = baseline(1:npoints) + var(i) * del(1:npoints)**fac(i)
     end do
     fit(1:npoints) = fit(1:npoints) + baseline(1:npoints)
-    
-!!$    if (ntype .ne. 1) then
-!!$       do i = 300, 675
-!!$          write(*,'(9(1pE11.2))') pos(i), fit(i), var(11:12), &
-!!$               dexp(-var(11)*database(11,i)), &
-!!$               dexp(-var(12)*database(12,i)), dexp(sumexp(i)), database(11:12,i)
-!!$       end do
-!!$       stop
-!!$    endif
+
     return
   end subroutine spectrum
   
@@ -1377,10 +1370,10 @@ CONTAINS
        end do
     end if
     
-    if (write_spec) then
+    if (write_spec .or. if_residuals) then
        if (write_fit) write (*, *) 'writing spectrum output file'
        do i = 1, npoints
-          write (24, '(f10.5, 1p3e13.5)') pos (i), spec (i), fit (i), spec (i) - &
+          write (specout_unit, '(f10.5, 1p3e13.5)') pos (i), spec (i), fit (i), spec (i) - &
                fit (i)
        end do
     end if
