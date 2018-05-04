@@ -1,6 +1,9 @@
-This short manual explain the basic functionality of the GASFIT code.
+This short manual explains the basic functionality of GASFIT code.
 This code was developed by Gonzalo Gonzalez Abad taking as starting point
-Kelly Chance gasbeta.
+Kelly Chance gasbeta at the Smithsonian Astrophysical Observatory.
+This code may be redistributed but please we kindly ask for you to share with
+as any improvements or bugs you may detect.
+Contact: Gonzalo Gonzalez Abad (ggonzalezabad@cfa.harvard.edu)
 
 The main goal of the code is to produce non-linear spectral fits of direct
 radiances. The main differences with gasbeta are:
